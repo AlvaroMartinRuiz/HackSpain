@@ -1,2 +1,2 @@
 Set-Location $PSScriptRoot
-.\.venv\Scripts\uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+.\.venv\Scripts\uvicorn src.main:app --host 0.0.0.0 --port 7860 --reload
