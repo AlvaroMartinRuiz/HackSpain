@@ -49,3 +49,16 @@ Automatic, and brutally literal. After each call the agent tells the graders wha
 ### The jury's final boss
 
 Everything the leaderboard ignores. The jury calls us themselves and judges the call as a person on the phone would: how it sounds, how it handles being interrupted, whether it feels like the clinic knows who is calling. Then they judge what we built around it — how a call is orchestrated, what's visible while it's happening, what can be learned from it afterwards, and whether we can show any of it working. Safety, language, and how we know our own agent works all count.
+
+## Sponsor credits available
+
+We have free access to the following platforms if we need them (using them is optional, and we're free to use other tools too):
+
+- **Vercel** — AI Gateway credits · $50
+- **QuiverAI** — API credits · $50. AI-native design tool and research company.
+- **Fal AI** — API credits · $50. Generative media platform / fast inference engine for image, video, audio, and 3D models.
+- **Cloudflare** — AI Gateway · $100. Build, deploy, and govern AI agents on the same network — secure MCP portals, identity-aware access, built-in inference.
+- **Exa** — API credits · $50. Search API for AI agents needing real-time web data, deep research, and structured content.
+- **Cognition** — Devin Max plan · $200 in codes. Devin, the autonomous software engineer that plans, writes, tests, and ships code.
+- **Cursor**
+- **Helmcode** — 600M tokens (DeepSeek V4 / GLM 5.3). Managed AI inference infrastructure.
