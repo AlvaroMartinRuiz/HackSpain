@@ -4,6 +4,10 @@
 
 [Prosper AI track](https://hackspain.app/tracks/prosper-ai)
 
+## Team docs
+
+- [PROSPER-TRACK.md](./PROSPER-TRACK.md) — guía de referencia del reto (API, scoring, problemas, setup)
+
 ## What we're building
 
 A voice AI agent that answers inbound scheduling calls for a clinic, the way a receptionist would.
