@@ -82,7 +82,7 @@ class Settings:
     console_token: str = field(default_factory=lambda: _env("CONSOLE_TOKEN"))
 
     # Speech to text
-    stt_provider: str = field(default_factory=lambda: _env("STT_PROVIDER", default="elevenlabs").lower())
+    stt_provider: str = field(default_factory=lambda: _env("STT_PROVIDER", default="deepgram").lower())
     deepgram_api_key: str = field(default_factory=lambda: _env("DEEPGRAM_API_KEY"))
     deepgram_model: str = field(default_factory=lambda: _env("DEEPGRAM_MODEL", default="nova-3"))
     deepgram_language: str = field(default_factory=lambda: _env("DEEPGRAM_LANGUAGE", default="multi"))
@@ -110,6 +110,11 @@ class Settings:
     llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", default="gpt-4o"))
     llm_temperature: float = field(default_factory=lambda: _float("LLM_TEMPERATURE", 0.2))
     llm_max_tool_rounds: int = field(default_factory=lambda: _int("LLM_MAX_TOOL_ROUNDS", 6))
+    # Gemini 3 maps this onto thinking_level (low / medium / high). Empty = model default.
+    llm_reasoning_effort: str = field(
+        default_factory=lambda: _env("LLM_REASONING_EFFORT", default="").lower()
+    )
+    llm_timeout_s: float = field(default_factory=lambda: _float("LLM_TIMEOUT_S", 60.0))
     # Gateways often need one of their own, e.g. Cloudflare's cf-aig-gateway-id.
     llm_extra_headers: dict = field(default_factory=lambda: _headers("LLM_EXTRA_HEADERS"))
 

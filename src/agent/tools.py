@@ -7,10 +7,12 @@ out of these functions, never out of the conversation.
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import TYPE_CHECKING, Any, Optional
 
+from src.domain.catalog import age_months
 from src.domain.engine import Slot
-from src.domain.identity import normalize_text, parse_national_id
+from src.domain.identity import normalize_provider_name, normalize_text, parse_national_id
 from src.domain.outcomes import ALL_REASONS, is_valid_reason
 from src.domain.timeref import format_slot, now_madrid
 from src.domain.triage import triage
@@ -143,10 +145,15 @@ SCHEMAS: list[dict[str, Any]] = [
                     "location_id": {"type": "string", "enum": ["centro", "norte", "sur"]},
                     "when": {
                         "type": "string",
-                        "description": "The caller's own words: 'el jueves que viene', 'mañana', "
-                                       "'first thing Monday', 'lo antes posible'.",
+                        "description": "The caller's own words for when: a day, a part of the day, "
+                                       "a window, or that they want the soonest. Pass it as they said it.",
                     },
                     "part_of_day": {"type": "string", "enum": ["morning", "afternoon"]},
+                    "complaint": {
+                        "type": "string",
+                        "description": "The symptom they described, if they did not name a specialty. "
+                                       "Checked for red flags before anything is booked.",
+                    },
                     "language": {
                         "type": "string",
                         "description": "Two-letter code, only when the caller needs a doctor who "
@@ -251,13 +258,24 @@ SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "cancel_appointment",
             "description": (
-                "Cancel one existing appointment from the chart. Two cancellations on one call "
-                "are two separate calls to this tool."
+                "Cancel one existing appointment from the chart. Each cancellation is its own "
+                "call to this tool. Pass the chart id when you have it; if they named a doctor "
+                "or have only one upcoming appointment, that is enough to identify the row. "
+                "Do not cancel appointments they did not ask to cancel."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"appointment_id": {"type": "string"}},
-                "required": ["appointment_id"],
+                "properties": {
+                    "appointment_id": {
+                        "type": "string",
+                        "description": "From the chart. Optional when there is only one upcoming, "
+                                       "or when doctor_name uniquely identifies it.",
+                    },
+                    "doctor_name": {
+                        "type": "string",
+                        "description": "The doctor they named, if they did not give an id.",
+                    },
+                },
             },
         },
     },
@@ -632,6 +650,27 @@ class ToolBox:
         # The age boundary is the clinic's rule, not the caller's problem: asking
         # for "the doctor" for an eight-year-old is paediatrics, not a refusal.
         specialty_id = args.get("specialty_id")
+        complaint = str(args.get("complaint") or "").strip()
+        if complaint:
+            is_child = None
+            born = (self.patient or {}).get("date_of_birth")
+            if born:
+                try:
+                    is_child = age_months(date.fromisoformat(str(born)[:10]), now_madrid().date()) < 168
+                except ValueError:
+                    is_child = None
+            triaged = triage(complaint, is_child)
+            if triaged.escalate:
+                self.last_reason = "medical_emergency"
+                return {
+                    "options": [],
+                    "emergency": True,
+                    "red_flag": triaged.red_flag,
+                    "guidance": "This is a red flag. Tell them to seek urgent care now and call "
+                                "escalate_call with medical_emergency. Book nothing.",
+                }
+            if not specialty_id and triaged.specialty_id:
+                specialty_id = triaged.specialty_id
         rerouted = self.engine.age_appropriate_specialty(self.patient, specialty_id)
         if rerouted:
             specialty_id = rerouted
@@ -728,8 +767,9 @@ class ToolBox:
                    "What they asked for exactly was not free, so say that first and let them "
                    "choose between what is here. ")
                 + ("" if search.part_of_day_possible else
-                   "This specialty has no appointments at that time of day at all — tell them "
-                   "that plainly instead of implying there might be. ")
+                   "Nothing falls in the part of day they asked for. Tell them that plainly. "
+                   "Do not book a different time of day unless they explicitly accept it. "
+                   "If they cannot move, call end_without_booking with no_availability. ")
                 + ("These are the first appointments that morning — offer the earliest. "
                    if search.when and search.when.first_thing else "")
                 + ("Mention what `notes` says before offering these. " if search.notes else "")
@@ -840,18 +880,36 @@ class ToolBox:
         }
 
     async def _tool_cancel_appointment(self, args: dict[str, Any]) -> dict[str, Any]:
-        appointment_id = str(args.get("appointment_id", "")).strip()
-        if not self._known_appointment(appointment_id):
-            return {"error": "that appointment is not on the chart",
-                    "guidance": "Only an upcoming appointment from open_chart can be cancelled. "
-                                "A past visit cannot."}
+        appointment_id = self._resolve_upcoming(
+            str(args.get("appointment_id") or "").strip(),
+            str(args.get("doctor_name") or "").strip(),
+        )
+        if not appointment_id:
+            upcoming = self.patient_context.get("upcoming") or []
+            return {
+                "error": "which appointment is not clear",
+                "upcoming": upcoming,
+                "guidance": "Name the doctor or the time from the chart, then call again. "
+                            "If they have two, cancel only the one they asked for.",
+            }
         result = await self.session.submit(
             "cancel", {"call_id": self.session.call_id, "appointment_id": appointment_id}
         )
         await self.session.record("decision", {"stage": "cancelled", "appointment_id": appointment_id})
-        return {"cancelled": result.accepted or result.duplicate, "status": result.status,
-                "guidance": "Confirm the cancellation, and ask whether anything else is needed — "
-                            "a caller cancelling two appointments says so here."}
+        leftover = [
+            row for row in (self.patient_context.get("upcoming") or [])
+            if row.get("appointment_id") != appointment_id
+        ]
+        self.patient_context["upcoming"] = leftover
+        return {
+            "cancelled": result.accepted or result.duplicate,
+            "status": result.status,
+            "appointment_id": appointment_id,
+            "still_on_the_chart": leftover,
+            "guidance": "Confirm this cancellation. If they asked to cancel another one as well, "
+                        "call this tool again for that row. Do not cancel leftover appointments "
+                        "unless they asked.",
+        }
 
     async def _tool_register_new_patient(self, args: dict[str, Any]) -> dict[str, Any]:
         self.registration_attempted = True
@@ -1014,6 +1072,27 @@ class ToolBox:
     def _known_appointment(self, appointment_id: str) -> bool:
         upcoming = self.patient_context.get("upcoming") or []
         return any(a.get("appointment_id") == appointment_id for a in upcoming)
+
+    def _resolve_upcoming(self, appointment_id: str, doctor_name: str = "") -> Optional[str]:
+        """Pick the chart row they meant, including a vague 'my appointment'."""
+        upcoming = self.patient_context.get("upcoming") or []
+        if appointment_id and self._known_appointment(appointment_id):
+            return appointment_id
+        query = normalize_provider_name(doctor_name)
+        if query:
+            hits = []
+            for row in upcoming:
+                name = normalize_provider_name(str(row.get("provider_name") or ""))
+                if query == name or query in name or any(
+                    token in name.split() for token in query.split() if len(token) > 3
+                ):
+                    hits.append(row)
+            unique = list({row.get("appointment_id"): row for row in hits}.values())
+            if len(unique) == 1:
+                return unique[0].get("appointment_id")
+        if len(upcoming) == 1:
+            return upcoming[0].get("appointment_id")
+        return None
 
     def _policy_for(self, slot: Slot) -> Optional[str]:
         payable = [plan for plan in slot.payable_with if plan]
