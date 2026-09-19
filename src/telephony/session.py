@@ -78,6 +78,9 @@ class CallSession:
         self._turn_lock = asyncio.Lock()
         self._pending_turn: Optional[str] = None
         self._closed = False
+        self._timed_out = False
+        self._allow_timeout_submit = False
+        self.language = "es"
         self._started_at = time.monotonic()
         self._last_partial_at = 0.0
 
@@ -158,8 +161,13 @@ class CallSession:
             await asyncio.sleep(settings.call_hard_limit_s)
         except asyncio.CancelledError:
             raise
+        self._timed_out = True
         await self.record("error", {"where": "deadline", "detail": "hard call limit reached"})
-        await self._guarantee_submission()
+        self._allow_timeout_submit = True
+        try:
+            await self._guarantee_submission()
+        finally:
+            self._allow_timeout_submit = False
 
     # ---- speaking -----------------------------------------------------
 
@@ -171,21 +179,21 @@ class CallSession:
         # shows the turn as the caller starts hearing it.
         await self.record("agent_said", {"text": text, "greeting": first})
         if not self.text_mode:
-            await self._say_queue.put((self._generation, text))
+            await self._say_queue.put((self._generation, text, self.language))
 
     async def _speaker_loop(self) -> None:
         while True:
-            generation, text = await self._say_queue.get()
+            generation, text, language = await self._say_queue.get()
             if generation != self._generation:
                 continue
-            await self._synthesize(generation, text)
+            await self._synthesize(generation, text, language)
 
-    async def _synthesize(self, generation: int, text: str) -> None:
+    async def _synthesize(self, generation: int, text: str, language: str) -> None:
         started = time.perf_counter()
         first_byte_ms: Optional[int] = None
         total = 0
         try:
-            async for chunk in self.synthesizer.stream(text):
+            async for chunk in self.synthesizer.stream(text, language):
                 if generation != self._generation:
                     return
                 if first_byte_ms is None:
@@ -297,7 +305,9 @@ class CallSession:
 
     async def _on_final(self, text: str, language: Optional[str]) -> None:
         await self.record("stt_final", {"text": text, "language": language})
-        if self._closed:
+        if language:
+            self.language = language.lower()[:2]
+        if self._closed or self._timed_out:
             return
 
         if self._turn_lock.locked():
@@ -341,6 +351,14 @@ class CallSession:
 
     async def submit(self, action: str, payload: dict[str, Any]) -> SubmitResult:
         """Send one action, and never send the same one twice."""
+        if self._timed_out and not self._allow_timeout_submit:
+            result = SubmitResult(
+                action, payload, 410, {"error": "call hard limit already reached"}, 0
+            )
+            await self.record("submit", {**result.as_dict(), "blocked_locally": True})
+            self.submissions.append(result)
+            return result
+
         key = f"{action}:{sorted(payload.items())!r}"
         if key in self._submitted_keys:
             existing = next(

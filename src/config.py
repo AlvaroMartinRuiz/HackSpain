@@ -92,6 +92,12 @@ class Settings:
 
     # Text to speech
     tts_provider: str = field(default_factory=lambda: _env("TTS_PROVIDER", default="elevenlabs").lower())
+    deepgram_tts_model_es: str = field(
+        default_factory=lambda: _env("DEEPGRAM_TTS_MODEL_ES", default="aura-2-silvia-es")
+    )
+    deepgram_tts_model_en: str = field(
+        default_factory=lambda: _env("DEEPGRAM_TTS_MODEL_EN", default="aura-2-thalia-en")
+    )
     elevenlabs_api_key: str = field(default_factory=lambda: _env("ELEVENLABS_API_KEY"))
     elevenlabs_voice_id: str = field(
         default_factory=lambda: _env("ELEVENLABS_VOICE_ID", default="EXAVITQu4vr4xnSDxMaL")
@@ -128,7 +134,9 @@ class Settings:
 
     def missing_voice_keys(self) -> list[str]:
         missing: list[str] = []
-        if self.stt_provider == "deepgram" and not self.deepgram_api_key:
+        if (
+            self.stt_provider == "deepgram" or self.tts_provider == "deepgram"
+        ) and not self.deepgram_api_key:
             missing.append("DEEPGRAM_API_KEY")
         if not self.llm_api_key:
             missing.append("LLM_API_KEY")
