@@ -60,6 +60,7 @@ def _gate(synth: "Synthesizer") -> asyncio.Semaphore:
 
 def _cache_key(text: str, language: str) -> tuple:
     return (settings.tts_provider, settings.elevenlabs_voice_id, settings.elevenlabs_model,
+            settings.elevenlabs_voice_id_en, settings.elevenlabs_voice_id_es,
             settings.elevenlabs_catalan_model,
             settings.deepgram_tts_model_es, settings.deepgram_tts_model_en,
             (language or "")[:2], text)

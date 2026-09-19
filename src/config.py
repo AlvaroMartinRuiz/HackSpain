@@ -111,6 +111,8 @@ class Settings:
     llm_temperature: float = field(default_factory=lambda: _float("LLM_TEMPERATURE", 0.2))
     llm_max_tool_rounds: int = field(default_factory=lambda: _int("LLM_MAX_TOOL_ROUNDS", 6))
     llm_timeout_s: float = field(default_factory=lambda: _float("LLM_TIMEOUT_S", 60.0))
+    llm_concurrency: int = field(default_factory=lambda: max(1, _int("LLM_CONCURRENCY", 8)))
+    llm_min_gap_s: float = field(default_factory=lambda: max(0.0, _float("LLM_MIN_GAP_S", 0.0)))
     # Empty skips the field (gpt-4o). Gemini 3 maps low/medium/high onto thinking_level.
     llm_reasoning_effort: str = field(
         default_factory=lambda: _env("LLM_REASONING_EFFORT", default="").lower()
@@ -164,6 +166,8 @@ class Settings:
         )
     )
     barge_in: bool = field(default_factory=lambda: _bool("BARGE_IN", True))
+    playback_lead_ms: float = field(default_factory=lambda: max(0.0, min(200.0, _float("PLAYBACK_LEAD_MS", 60.0))))
+    agent_hold_s: float = field(default_factory=lambda: max(0.0, _float("AGENT_HOLD_S", 3.0)))
     # Pipecat LocalSmartTurn v3: wait until the caller has actually finished.
     smart_turn: bool = field(default_factory=lambda: _bool("SMART_TURN", True))
     smart_turn_stop_secs: float = field(

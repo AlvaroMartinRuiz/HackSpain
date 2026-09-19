@@ -35,9 +35,7 @@ Closer = Callable[[], Awaitable[None]]
 # ourselves when they talk; we never start a turn until Pipecat Smart Turn
 # says they have finished.
 MIN_BARGE_IN_WORDS = 2
-MIN_SPEAKING_MS_BEFORE_BARGE_IN = 350
-ECHO_OVERLAP = 0.75
-PLAYBACK_LEAD_S = 0.20
+PLAYBACK_LEAD_S = settings.playback_lead_ms / 1000.0
 # ~3 minutes of µ-law; the harness cuts the call before this anyway.
 TAPE_CAP_BYTES = 8000 * 180
 
@@ -102,6 +100,11 @@ class CallSession:
         self._last_part_at = 0.0
         self._turn_deadline_task: Optional[asyncio.Task] = None
         self._last_committed = ""
+        self._agent_tasks: set[asyncio.Task] = set()
+        self._last_caller_activity = 0.0
+        self._turn_ready = False
+        self._speech_watch_task: Optional[asyncio.Task] = None
+        self._last_final_at = 0.0
 
         self.seen_patients: list[dict[str, Any]] = []
         self.submissions: list[SubmitResult] = []
@@ -181,10 +184,9 @@ class CallSession:
             return
         if not chunk:
             return
-        # Prosper's "inbound" should be the patient, but the last practice
-        # delivered 19 s of inbound and Deepgram heard silence — so we transcribe
-        # every track and drop echoes of our own speech later.
         key = track or "inbound"
+        if key != "inbound":
+            return
         self._media_by_track[key] = self._media_by_track.get(key, 0) + 1
         self._media_frames += 1
         self._media_bytes += len(chunk)
@@ -207,6 +209,8 @@ class CallSession:
 
     async def _on_stt_notice(self, kind: str, payload: dict[str, Any]) -> None:
         await self.record(kind, payload)
+        if kind.endswith(("_error", "_stopped")):
+            await self.record("error", {"where": "stt", "detail": payload})
         if kind == "stt_utterance_end":
             if self._turn_gate is not None and self._turn_gate.enabled:
                 await self._maybe_close_turn("utterance_end")
@@ -219,22 +223,7 @@ class CallSession:
             ):
                 self._waiting_since = time.monotonic()
             return
-        if kind != "stt_low_confidence" or self._closed or self._closing:
-            return
-        if self._turn_parts:
-            return
-        self._caller_speaking = False
-        now = time.monotonic()
-        if (
-            now - self._last_repair_prompt_at < 4.0
-            or self.is_speaking
-            or self._turn_lock.locked()
-        ):
-            return
-        self._last_repair_prompt_at = now
-        prompt = phrases.pick(phrases.RETRY, self.language)
-        self.agent.note_agent_line(prompt)
-        await self.say(prompt)
+        # Confidence is diagnostic; the final text still belongs to the caller.
 
     def _tape_target_bytes(self) -> int:
         """How long the tape should be right now, in µ-law bytes at 8 kHz.
@@ -318,6 +307,8 @@ class CallSession:
         # did. A third finish() only retries CloseStream on a dead socket.
         if self.synthesizer is not None:
             await self.synthesizer.aclose()
+        if self._turn_gate is not None:
+            await self._turn_gate.aclose()
         await self.client.aclose()
 
         self.store.close_call(self.call_id, status)
@@ -339,18 +330,20 @@ class CallSession:
         except (asyncio.TimeoutError, Exception):
             # Anything still outstanding is not worth the submission window.
             pass
-        if self._turn_parts:
-            await self._commit_turn()
 
     async def _drain_and_settle(self) -> None:
         assert self.transcriber is not None
         # finish() runs the recovered turn itself, unless one was already in
         # flight — in which case that turn picks it up and the lock is the wait.
         await self.transcriber.finish()
+        if self._turn_parts:
+            await self._commit_turn()
         await self._settled()
 
     async def _settled(self) -> None:
         """Return once no turn is being worked on."""
+        while self._agent_tasks:
+            await asyncio.gather(*(asyncio.shield(t) for t in tuple(self._agent_tasks)))
         async with self._turn_lock:
             pass
 
@@ -509,6 +502,8 @@ class CallSession:
                 now = time.monotonic()
                 if playhead > now + PLAYBACK_LEAD_S:
                     await asyncio.sleep(playhead - now - PLAYBACK_LEAD_S)
+                if generation != self._generation:
+                    break
                 await self._send_media(frame)
                 self._current_sent += len(frame)
                 playhead += audio.FRAME_MS / 1000
@@ -617,28 +612,16 @@ class CallSession:
         return " ".join(words[:keep])
 
     def _looks_like_echo(self, text: str) -> bool:
-        """Skip a transcript that is just our own voice coming back on the line.
-
-        STT almost never returns the TTS word-for-word, so a substring check
-        misses most echo. Word overlap against what we just said catches the
-        noisy remainder without needing a second audio pass.
-        """
-        heard = _words(text)
-        if len(heard) < 2:
-            return False
-        said = _words(self._current_text) or _words(self._last_spoken)
-        if not said:
-            return False
-        heard_line = " ".join(heard)
-        said_line = " ".join(said)
-        if heard_line in said_line or said_line in heard_line:
-            return True
-        overlap = len(set(heard) & set(said)) / len(set(heard))
-        return overlap >= ECHO_OVERLAP
+        """Inbound is caller audio. Repeating an offered slot is a valid answer."""
+        return False
 
     def _worthy_barge_in(self, text: str, *, final: bool) -> bool:
         """Stop ourselves when the caller talks over us; never on a cough."""
-        return len(_words(text)) >= MIN_BARGE_IN_WORDS
+        words = _words(text)
+        return (final and bool(words)) or len(words) >= MIN_BARGE_IN_WORDS or (
+            len(words) == 1 and words[0] in {"no", "yes", "wait", "stop", "sorry",
+                                           "sí", "si", "espera", "pare", "perdón", "atura"}
+        )
 
     @property
     def is_speaking(self) -> bool:
@@ -659,6 +642,7 @@ class CallSession:
     # ---- listening ----------------------------------------------------
 
     def _caller_is_talking(self) -> None:
+        self._last_caller_activity = time.monotonic()
         self._disarm_silence()
         self._silence_prompts = 0
 
@@ -668,6 +652,26 @@ class CallSession:
         self._caller_speaking = True
         self._last_speech_started_at = time.monotonic()
         await self.record("caller_speaking", {})
+        if self._speech_watch_task is not None:
+            self._speech_watch_task.cancel()
+        self._speech_watch_task = asyncio.create_task(self._watch_transcript())
+        self._tasks.append(self._speech_watch_task)
+
+    async def _watch_transcript(self) -> None:
+        started = self._last_speech_started_at
+        await asyncio.sleep(2.5)
+        while not self._closing and not self._closed and self._last_final_at < started:
+            if ((self._turn_gate is not None and self._turn_gate.speaking)
+                    or time.monotonic() - self._last_caller_activity < SPEECH_HOLD_S):
+                await asyncio.sleep(1.0)
+                continue
+            await self.record("speech_without_transcript", {"wait_s": time.monotonic() - started})
+            self._caller_speaking = False
+            if self._turn_parts:
+                self._arm_turn_deadline()
+            else:
+                self._arm_silence()
+            return
 
     async def _on_partial(self, text: str) -> None:
         if not self._looks_like_echo(text):
@@ -679,16 +683,10 @@ class CallSession:
             self._last_partial_at = now
             await self.record("stt_partial", {"text": text})
 
-        if not settings.barge_in or not self.is_speaking:
+        if not settings.barge_in or not (self.is_speaking or self._turn_lock.locked()):
             return
         if self._looks_like_echo(text):
             return
-        # The grace period guards against our own first frames; before any
-        # audio is on the line there is nothing to guard.
-        if self._speaking_since is not None:
-            speaking_ms = (now - self._speaking_since) * 1000
-            if speaking_ms < MIN_SPEAKING_MS_BEFORE_BARGE_IN:
-                return
         if not self._worthy_barge_in(text, final=False):
             return
         await self._interrupt(text.strip())
@@ -697,6 +695,7 @@ class CallSession:
         text = (text or "").strip()
         if not text:
             return
+        self._last_final_at = time.monotonic()
         gate = self._turn_gate is not None and self._turn_gate.enabled
         if not gate:
             self._caller_speaking = False
@@ -706,7 +705,7 @@ class CallSession:
             await self.record("stt_echo", {"text": text})
             return
         self._heard_caller = True
-        if settings.barge_in and self.is_speaking and self._worthy_barge_in(text, final=True):
+        if settings.barge_in and (self.is_speaking or self._turn_lock.locked()) and self._worthy_barge_in(text, final=True):
             await self._interrupt(text)
         decision = decide_language(
             text,
@@ -747,7 +746,10 @@ class CallSession:
                 "source": self.language_source,
             })
             self.agent.note_language(self.language)
-            if self.transcriber is not None and hasattr(self.transcriber, "set_stream_language"):
+            # Scribe already auto-detects all three languages. Reconnecting it
+            # on a switch discards in-flight audio and delayed final events.
+            if (settings.stt_provider == "deepgram" and self.transcriber is not None
+                    and hasattr(self.transcriber, "set_stream_language")):
                 try:
                     await self.transcriber.set_stream_language(self.language)
                 except Exception as exc:
@@ -763,16 +765,20 @@ class CallSession:
         self._last_part_at = time.monotonic()
         self._disarm_turn_deadline()
 
-        if gate and self._turn_gate is not None and not self._turn_gate.turn_over:
-            # A noisy "Hello?" is not a turn. Wait until Smart Turn says they
-            # have finished, then handle the whole request as one.
-            self._arm_turn_deadline()
+        if gate and not self._closing:
+            # Smart Turn grants permission; a short grace joins late STT finals.
+            ready = self._turn_ready or self._turn_gate.turn_over
+            self._arm_turn_deadline(0.35 if ready else None)
             return
 
         await self._commit_turn()
 
     async def _on_turn_event(self, event: str) -> None:
+        if event:
+            await self.record("turn_gate", {"event": event})
         if event == "start":
+            self._turn_ready = False
+            self._last_caller_activity = time.monotonic()
             self._caller_speaking = True
             self._disarm_silence()
             self._silence_prompts = 0
@@ -781,14 +787,18 @@ class CallSession:
             await self._maybe_close_turn("vad_pause")
             return
         if event == "complete":
+            self._turn_ready = True
             self._caller_speaking = False
-            await self._commit_turn()
+            self._arm_turn_deadline(0.35)
 
     async def _maybe_close_turn(self, reason: str) -> None:
         if self._turn_gate is None or not self._turn_gate.enabled:
             return
+        if self._turn_gate.speaking:
+            return
         if self._turn_gate.turn_over:
-            await self._commit_turn()
+            self._turn_ready = True
+            self._arm_turn_deadline(0.35)
             return
         now = time.monotonic()
         if now - self._last_turn_decide_at < 0.3:
@@ -803,15 +813,16 @@ class CallSession:
                 "parts": len(self._turn_parts),
             })
         if complete:
+            self._turn_ready = True
             self._caller_speaking = False
-            await self._commit_turn()
+            self._arm_turn_deadline(0.35)
             return
         self._arm_turn_deadline()
 
-    def _arm_turn_deadline(self) -> None:
+    def _arm_turn_deadline(self, delay: Optional[float] = None) -> None:
         """If the model stays incomplete, still answer — never sit on their words."""
         self._disarm_turn_deadline()
-        wait_s = max(3.0, settings.smart_turn_stop_secs + 1.8)
+        wait_s = delay if delay is not None else max(3.0, settings.smart_turn_stop_secs + 1.8)
         self._turn_deadline_task = asyncio.create_task(
             self._turn_deadline(wait_s), name=f"turn-deadline:{self.call_id}"
         )
@@ -829,6 +840,10 @@ class CallSession:
             return
         if not self._turn_parts or self._closed or self._closing:
             return
+        if ((self._turn_gate is not None and self._turn_gate.speaking)
+                or time.monotonic() - self._last_caller_activity < 0.4):
+            self._arm_turn_deadline()
+            return
         await self.record("turn_decision", {
             "reason": "deadline",
             "complete": True,
@@ -844,16 +859,24 @@ class CallSession:
         self._disarm_turn_deadline()
         text = " ".join(part for part in self._turn_parts if part).strip()
         self._turn_parts = []
+        self._turn_ready = False
         if self._turn_gate is not None:
             self._turn_gate.reset()
         if not text or self._closed:
             return
-        if (
-            text == self._last_committed
-            or (self._last_committed and text in self._last_committed)
-        ):
-            return
         self._last_committed = text
+        await self.record("turn_committed", {"text": text})
+        self._caller_speaking = False
+        if self.text_mode:
+            await self._run_caller_turn(text)
+        else:
+            # Readers must keep consuming audio and transcripts during LLM work.
+            task = asyncio.create_task(self._run_caller_turn(text), name=f"agent:{self.call_id}")
+            self._agent_tasks.add(task)
+            self._tasks.append(task)
+            task.add_done_callback(self._agent_tasks.discard)
+
+    async def _run_caller_turn(self, text: str) -> None:
 
         if self._turn_lock.locked():
             # The caller added something while we were still working: keep the
@@ -868,7 +891,10 @@ class CallSession:
             pending: Optional[str] = text
             while pending:
                 current, pending = pending, None
-                await self.agent.handle(current)
+                try:
+                    await self.agent.handle(current)
+                except Exception as exc:
+                    await self.record("error", {"where": "agent_turn", "detail": str(exc)})
                 if self._pending_turn:
                     pending, self._pending_turn = self._pending_turn, None
         self._arm_silence()
@@ -945,7 +971,7 @@ def _drain(queue: asyncio.Queue) -> None:
 
 
 def _words(text: str) -> list[str]:
-    return [token for token in (text or "").lower().split() if token]
+    return re.findall(r"[^\W_]+", (text or "").lower())
 
 
 def _opening_retry(first: bool) -> tuple[str, str]:

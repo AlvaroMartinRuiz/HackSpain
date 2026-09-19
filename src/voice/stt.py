@@ -269,9 +269,6 @@ class DeepgramTranscriber:
                         "text": transcript[:160],
                         "confidence": confidence,
                     })
-                if message.get("speech_final"):
-                    await self._flush()
-                return
             self._pending.append(transcript)
             if message.get("speech_final"):
                 await self._flush()
@@ -314,6 +311,8 @@ class ElevenLabsTranscriber:
         self._first_chunk = True
         self._pending = bytearray()
         self._last_committed = ""
+        self._pending_commits: list[str] = []
+        self._annotated_commits: list[str] = []
         self._heard_speech = False
         self.bytes_sent = 0
 
@@ -417,7 +416,8 @@ class ElevenLabsTranscriber:
             "sample_rate": 8000,
         }
         if self._first_chunk:
-            context = (self._last_committed or settings.greeting)[:50]
+            # Context belongs to this audio stream, not the receptionist's voice.
+            context = self._last_committed[-50:]
             if context:
                 message["previous_text"] = context
             self._first_chunk = False
@@ -442,6 +442,9 @@ class ElevenLabsTranscriber:
                     await self._reader
                 except (asyncio.CancelledError, Exception):
                     pass
+        pending, self._pending_commits = self._pending_commits, []
+        for text in pending:
+            await self.on_final(text, self._language)
         if self._socket is not None:
             try:
                 await self._socket.close()
@@ -512,6 +515,20 @@ class ElevenLabsTranscriber:
 
         if kind in {"committed_transcript", "committed_transcript_with_timestamps"}:
             self._heard_speech = False
+            # Auto mode requests language detection, which delivers a second,
+            # delayed event for the same segment. Use that event once, with its
+            # language, even if a new partial arrives between the two events.
+            if kind == "committed_transcript" and self._stream_language is None:
+                if text in self._annotated_commits:
+                    self._annotated_commits.remove(text)
+                elif text:
+                    self._pending_commits.append(text)
+                return
+            if kind == "committed_transcript_with_timestamps":
+                if text in self._pending_commits:
+                    self._pending_commits.remove(text)
+                else:
+                    self._annotated_commits.append(text)
             if text:
                 self._last_committed = text
                 await self.on_final(text, self._language)

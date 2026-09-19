@@ -6,6 +6,7 @@ import asyncio
 import re
 import time
 import unicodedata
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, Optional
 
 from src.agent import phrases
@@ -24,7 +25,7 @@ MAX_HISTORY_MESSAGES = 26
 SOFT_FLUSH_CHARS = 130
 # If the model has not spoken yet, fill the line so the harness does not
 # hang up for "no audible audio". HOLD is cached, so it is cheap.
-HOLD_IF_QUIET_S = 1.8
+HOLD_IF_QUIET_S = settings.agent_hold_s
 # Hold only a filler opener ("Thank you.") so it rides with the next sentence.
 # A real short line ("¿Hablo con Ella Smith?") must not wait for the LLM to finish.
 _FILLER_OPENER = re.compile(
@@ -33,6 +34,10 @@ _FILLER_OPENER = re.compile(
     r"d['']acord|moltes gracies)\.?$",
     re.IGNORECASE,
 )
+
+
+class TurnInterrupted(Exception):
+    """The caller resumed before this answer was finished."""
 
 
 class Agent:
@@ -59,6 +64,7 @@ class Agent:
     async def handle(self, text: str) -> None:
         """One caller turn, start to finish."""
         started = time.perf_counter()
+        generation = self.session._generation
         self.messages.append({"role": "user", "content": text})
         self._trim()
 
@@ -74,13 +80,18 @@ class Agent:
         try:
             for round_index in range(settings.llm_max_tool_rounds):
                 try:
-                    completion = await self._run_round()
+                    completion = await self._run_round(generation)
+                except TurnInterrupted:
+                    await self.session.record("decision", {"stage": "stale_response_stopped"})
+                    return
                 except LLMError as exc:
                     await self.session.record("error", {"where": "llm", "detail": str(exc)})
                     await self.session.say(phrases.pick(phrases.MODEL_DOWN, self.session.language))
                     return
 
                 spoke = spoke or bool(completion.text.strip())
+                if generation != self.session._generation:
+                    return
 
                 if not completion.wants_tools:
                     if completion.text.strip():
@@ -94,11 +105,17 @@ class Agent:
                 })
 
                 for call in completion.tool_calls:
-                    await self._run_tool(call.id, call.name, call.parsed_arguments())
+                    if generation != self.session._generation:
+                        self.messages.append({"role": "tool", "tool_call_id": call.id,
+                                              "content": '{"skipped":"caller interrupted"}'})
+                    else:
+                        await self._run_tool(call.id, call.name, call.parsed_arguments())
 
                 for briefing in self._pending_briefings:
                     self.messages.append({"role": "system", "content": briefing})
                 self._pending_briefings.clear()
+                if generation != self.session._generation:
+                    return
 
                 if not spoke:
                     await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
@@ -122,26 +139,31 @@ class Agent:
             await asyncio.sleep(HOLD_IF_QUIET_S)
         except asyncio.CancelledError:
             return
-        if self.session.is_speaking or self.session.text_mode:
+        if (self.session.is_speaking or self.session.text_mode
+                or self.session._caller_speaking or self.session._turn_parts
+                or self.session._pending_turn):
             return
         await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
 
-    async def _run_round(self) -> Completion:
+    async def _run_round(self, generation: Optional[int] = None) -> Completion:
         """Stream one completion, speaking each sentence as it lands."""
         self._buffer = ""
         speech_parts: list[str] = []
         completion: Optional[Completion] = None
 
-        async for kind, value in self.llm.stream(self._sound_history(), self.tools.schemas()):
-            if kind == "text":
-                self._buffer += value
-                for sentence in self._drain():
-                    speech_parts.append(sentence)
-                    if _ready_to_speak(speech_parts):
-                        await self.session.say(" ".join(speech_parts))
-                        speech_parts.clear()
-            else:
-                completion = value
+        async with aclosing(self.llm.stream(self._sound_history(), self.tools.schemas())) as stream:
+            async for kind, value in stream:
+                if generation is not None and generation != self.session._generation:
+                    raise TurnInterrupted()
+                if kind == "text":
+                    self._buffer += value
+                    for sentence in self._drain():
+                        speech_parts.append(sentence)
+                        if _ready_to_speak(speech_parts):
+                            await self.session.say(" ".join(speech_parts))
+                            speech_parts.clear()
+                else:
+                    completion = value
 
         tail = self._buffer.strip()
         if tail:

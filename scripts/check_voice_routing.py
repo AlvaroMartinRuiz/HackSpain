@@ -24,7 +24,7 @@ async def _noop(*_args) -> None:
     return None
 
 
-async def _low_confidence_is_rejected() -> bool:
+async def _low_confidence_is_preserved() -> bool:
     finals: list[str] = []
     notices: list[str] = []
 
@@ -47,7 +47,7 @@ async def _low_confidence_is_rejected() -> bool:
             }],
         },
     })
-    return not finals and notices == ["stt_low_confidence"]
+    return finals == ["television noise"] and notices == ["stt_low_confidence"]
 
 
 def check(label: str, ok: bool, detail: str = "") -> int:
@@ -134,11 +134,11 @@ def main() -> int:
     total += 1
     passed += check("numerals are on", qs.get("numerals") == ["true"])
     total += 1
-    passed += check("endpointing allows a mid-thought pause", qs.get("endpointing") == ["500"])
+    passed += check("endpointing follows configuration", qs.get("endpointing") == [str(settings.stt_endpointing_ms)])
     total += 1
     passed += check(
-        "low-confidence noise is not sent to the agent",
-        asyncio.run(_low_confidence_is_rejected()),
+        "low-confidence text is retained with a diagnostic notice",
+        asyncio.run(_low_confidence_is_preserved()),
     )
 
     scribe = parse_qs(urlparse(ElevenLabsTranscriber(_noop, _noop)._url()).query)

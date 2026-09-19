@@ -105,6 +105,7 @@ async def one_call(url: str, index: int, seconds: float, payload: bytes | None) 
                     "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
                     "customParameters": {
                         "call_id": call_id,
+                        "dry_run": "true",
                         "from_number": f"+346{10000000 + index:08d}"[:12],
                     },
                 },

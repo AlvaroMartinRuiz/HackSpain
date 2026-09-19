@@ -64,8 +64,6 @@ class LLMError(RuntimeError):
 
 _RETRY_STATUSES = {429, 503}
 _MAX_ATTEMPTS = 4
-# Cloudflare's wholesale Gemini cap 429s a tool follow-up 250 ms later.
-_MIN_GAP_S = 1.2
 
 
 def _retry_delay_s(response: httpx.Response, attempt: int) -> float:
@@ -90,7 +88,8 @@ class LLMClient:
             timeout=httpx.Timeout(settings.llm_timeout_s, connect=6.0),
             limits=httpx.Limits(max_connections=60, max_keepalive_connections=30),
         )
-        self._gate = asyncio.Lock()
+        self._gate = asyncio.Semaphore(settings.llm_concurrency)
+        self._start_gate = asyncio.Lock()
         self._next_ok = 0.0
 
     async def aclose(self) -> None:
@@ -132,9 +131,11 @@ class LLMClient:
 
         async with self._gate:
             for attempt in range(_MAX_ATTEMPTS):
-                wait = self._next_ok - time.monotonic()
-                if wait > 0:
-                    await asyncio.sleep(wait)
+                async with self._start_gate:
+                    wait = self._next_ok - time.monotonic()
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                    self._next_ok = time.monotonic() + settings.llm_min_gap_s
 
                 started = time.perf_counter()
                 completion = Completion()
@@ -223,7 +224,6 @@ class LLMClient:
                     partial[key] for key in sorted(partial) if partial[key].name
                 ]
                 completion.elapsed_ms = int((time.perf_counter() - started) * 1000)
-                self._next_ok = time.monotonic() + _MIN_GAP_S
                 yield "done", completion
                 return
 

@@ -59,6 +59,7 @@ def _ensure_model() -> Any:
 
             proto = LocalSmartTurnAnalyzerV3(sample_rate=SMART_TURN_RATE, cpu_count=1)
             _MODEL = (proto._session, proto._feature_extractor)
+            proto._executor.shutdown(wait=False)
             _READY = True
             logger.info("pipecat smart-turn v3 ready")
             return _MODEL
@@ -117,7 +118,7 @@ class TurnGate:
     """Per-call listener: VAD for 'they started', Smart Turn for 'they finished'."""
 
     def __init__(self) -> None:
-        self._analyzer = _make_analyzer()
+        self._analyzer = _make_analyzer() if available() else None
         self._energy = EnergyVAD()
         self._silero = None
         if self._analyzer is not None:
@@ -154,7 +155,7 @@ class TurnGate:
             state = await self._silero.analyze_audio(pcm8)
             self._speaking = state in {VADState.STARTING, VADState.SPEAKING, VADState.STOPPING}
             became_quiet = was and state == VADState.QUIET
-            became_speech = (not was) and state == VADState.SPEAKING
+            became_speech = (not was) and self._speaking
         else:
             event = self._energy.feed(ulaw)
             self._speaking = self._energy.speaking
@@ -194,3 +195,8 @@ class TurnGate:
         self.last_probability = None
         if self._analyzer is not None:
             self._analyzer.clear()
+
+    async def aclose(self) -> None:
+        analyzer, self._analyzer = self._analyzer, None
+        if analyzer is not None:
+            analyzer._executor.shutdown(wait=False, cancel_futures=True)

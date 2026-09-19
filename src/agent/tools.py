@@ -983,7 +983,10 @@ class ToolBox:
             "stage": "escalated", "reason": reason, "why": args.get("explanation") or "",
         })
         return {"recorded": result.accepted or result.duplicate, "reason": reason,
-                "guidance": "Stay on the line with them for one more sentence, then close."}
+                "guidance": "This records an escalation; it does not transfer the audio or "
+                            "connect a clinician. Never claim a specialist is on the line. "
+                            "For an emergency, tell the caller to seek urgent care now; "
+                            "do not ask them to wait for a transfer."}
 
     # ---- helpers ------------------------------------------------------
 
