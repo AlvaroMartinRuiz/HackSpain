@@ -82,7 +82,15 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/", include_in_schema=False)
+async def control() -> FileResponse:
+    """Every call and every agent at once."""
+    return FileResponse(STATIC_DIR / "ops.html")
+
+
+@app.get("/console", include_in_schema=False)
 async def console() -> FileResponse:
+    """The original one-call-at-a-time console, kept for the deep read of a
+    single call. The control dashboard links to it rather than replacing it."""
     return FileResponse(STATIC_DIR / "index.html")
 
 

@@ -128,3 +128,38 @@ def ulaw_to_wav(ulaw: bytes, sample_rate: int = SAMPLE_RATE) -> bytes:
         handle.setframerate(sample_rate)
         handle.writeframes(pcm)
     return buffer.getvalue()
+
+
+def pad_ulaw(ulaw: bytes, length: int) -> bytes:
+    """Extend a µ-law buffer with silence up to ``length`` bytes."""
+    if length <= len(ulaw):
+        return ulaw[:length]
+    return ulaw + SILENCE_BYTE * (length - len(ulaw))
+
+
+def mix_ulaw(*tracks: bytes) -> bytes:
+    """Sum µ-law tracks into one, padding the short ones with silence.
+
+    Used for the console's single conversation playback: the caller and the
+    agent on one timeline. Tracks that were recorded without wall-clock padding
+    (older tapes) still mix — the shorter side simply finishes early.
+    """
+    active = [track for track in tracks if track]
+    if not active:
+        return b""
+    if len(active) == 1:
+        return active[0]
+
+    length = max(len(track) for track in active)
+    tables = [_ulaw_table()]
+    table = tables[0]
+    mixed = bytearray(length)
+    for index in range(length):
+        total = 0
+        for track in active:
+            if index < len(track):
+                total += table[track[index]]
+        # Soft clip rather than wrap: two loud sides at once should not crackle.
+        sample = max(-CLIP, min(CLIP, total))
+        mixed[index] = _linear_to_ulaw_sample(sample)
+    return bytes(mixed)

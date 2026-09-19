@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>El Turno · call &amp; agent control</title>
+<link rel="stylesheet" href="/static/ops.css" />
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <span class="mark" id="brand-mark" data-icon="mark-elturno"></span>
+    <div>
+      <h1>El Turno · control</h1>
+      <span class="sub" id="clinic-name">Clínica Arenal</span>
+    </div>
+    <span class="dot" id="link-dot" title="connection to the server"></span>
+  </div>
+  <div class="pills" id="pills"></div>
+  <nav class="actions">
+    <button class="btn" id="btn-rehearse">
+      <span class="h-icon" data-icon="icon-rehearse"></span> Rehearse
+    </button>
+    <a class="btn ghost" href="/console">Classic console</a>
+  </nav>
+</header>
+
+<section class="kpis" id="kpis"></section>
+
+<main>
+  <div class="left" id="left-col">
+    <section class="panel agents">
+      <h2>
+        <span class="h-icon" data-icon="metric-live"></span>
+        Agents
+        <span class="count" id="agent-count">0</span>
+        <span class="legend">
+          <i class="listening">listening</i>
+          <i class="thinking">thinking</i>
+          <i class="speaking">speaking</i>
+          <i class="idle">idle</i>
+        </span>
+      </h2>
+      <div class="agent-grid" id="agent-grid"></div>
+    </section>
+
+    <div class="splitter h" id="split-fleet" role="separator" aria-orientation="horizontal"
+         tabindex="0" aria-label="Resize the agents panel"
+         title="Drag to resize · double-click to reset"></div>
+
+    <section class="panel calls">
+      <h2>
+        <span class="h-icon" data-icon="icon-transcript"></span>
+        Calls
+        <span class="count" id="call-count">0</span>
+        <span class="seg" id="call-filter">
+          <button class="on" data-scope="all">All</button>
+          <button data-scope="submitted">With record</button>
+          <button data-scope="silent">No record</button>
+          <button data-scope="errors">With errors</button>
+        </span>
+      </h2>
+      <div class="table-wrap">
+        <table class="calls-table">
+          <thead>
+            <tr>
+              <th>Start</th>
+              <th>Who</th>
+              <th>Status</th>
+              <th style="text-align:right">Dur.</th>
+              <th style="text-align:right">Turns</th>
+              <th style="text-align:right">Cuts</th>
+              <th style="text-align:right">p50</th>
+              <th>Record</th>
+            </tr>
+          </thead>
+          <tbody id="calls-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div class="splitter v" id="split-detail" role="separator" aria-orientation="vertical"
+       tabindex="0" aria-label="Resize the detail panel"
+       title="Drag to resize · double-click to reset"></div>
+
+  <section class="panel detail" id="detail-pane">
+    <div class="call-head" id="call-head">
+      <div class="call-head-empty">Select an agent or a call to inspect it</div>
+    </div>
+    <!-- Outside the head on purpose: the head is rebuilt on every event, and
+         rebuilding an <audio> element stops whatever was playing. -->
+    <div id="tape"></div>
+    <div class="transcript" id="transcript"></div>
+    <div class="partial" id="partial"></div>
+    <div class="tabs">
+      <button class="tab active" data-tab="decisions">Decisions</button>
+      <button class="tab" data-tab="tools">
+        <span class="h-icon" data-icon="icon-tool"></span> Tools
+      </button>
+      <button class="tab" data-tab="record">Record</button>
+    </div>
+    <div class="tab-body" id="tab-decisions"></div>
+    <div class="tab-body hidden" id="tab-tools"></div>
+    <div class="tab-body hidden" id="tab-record"></div>
+  </section>
+</main>
+
+<div class="modal hidden" id="rehearse-modal">
+  <div class="sheet">
+    <h3><span class="h-icon" data-icon="icon-rehearse"></span> Rehearse a call</h3>
+    <p class="hint">
+      Same brain, same tools, same clinic — as text, with no audio and no quota.
+      One patient turn per line.
+    </p>
+
+    <label for="rehearse-turns">What the patient says</label>
+    <textarea id="rehearse-turns" spellcheck="false">Good morning, I would like an appointment with Dr Sáez.
+My name is Marta Ruiz, my ID is 12345678Z.
+Next Thursday first thing, if possible.</textarea>
+
+    <label for="rehearse-number">Caller number (empty = withheld)</label>
+    <input type="text" id="rehearse-number" placeholder="+34600111222" spellcheck="false" />
+
+    <div class="row">
+      <label>
+        <input type="checkbox" id="rehearse-dry" checked />
+        Dry run — keep the record local
+      </label>
+    </div>
+
+    <div class="foot">
+      <span class="status" id="rehearse-status"></span>
+      <button class="btn ghost" id="rehearse-cancel">Close</button>
+      <button class="btn" id="rehearse-run">Rehearse</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/ops.js"></script>
+</body>
+</html>
