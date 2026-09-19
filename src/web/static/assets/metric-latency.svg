@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="-1.519 -1.546 27.097 27.097" preserveAspectRatio="xMidYMid meet">
+<!-- SVG created with Arrow, by QuiverAI (https://quiver.ai) -->
+  <defs>
+    <linearGradient id="paint0_linear_23880_34946" x1="12.22" x2="13.37" y1="9.061" y2="9.927" gradientTransform="scale(.6)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#515154" offset="0"></stop>
+      <stop stop-color="#F9F9FB" offset="1"></stop>
+    </linearGradient>
+    <linearGradient id="paint1_linear_23880_34946" x1="27.69" x2="26.53" y1="9.061" y2="9.927" gradientTransform="scale(.6)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#515154" offset="0"></stop>
+      <stop stop-color="#F9F9FB" offset="1"></stop>
+    </linearGradient>
+    <linearGradient id="paint2_linear_23880_34946" x1="21.99" x2="23.34" y1="22.22" y2="23.07" gradientTransform="scale(.6)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#515154" offset="0"></stop>
+      <stop stop-color="#F9F9FB" offset="1"></stop>
+    </linearGradient>
+  </defs>
+  
+  <circle cx="12.03" cy="13.84" r="7.918" stroke="currentColor" stroke-width=".77"></circle>
+  <path d="m12.02 3.834v1.968" stroke="currentColor" stroke-width=".77"></path>
+  <rect x="9.847" y="2.248" rx=".7438" stroke="currentColor" stroke-width=".77"></rect>
+  <path d="m7.422 5.172 1.08 1.5" stroke="currentColor" stroke-width=".77"></path>
+  <path d="m7.548 4.638-0.96 0.786" stroke="currentColor" stroke-linecap="round" stroke-width="1.041"></path>
+  <path d="m16.56 5.172-1.074 1.5" stroke="currentColor" stroke-width=".77"></path>
+  <path d="m16.49 4.638 0.978 0.786" stroke="currentColor" stroke-linecap="round" stroke-width="1.041"></path>
+  <path d="m7.422 5.172 0.576 0.72-0.492 0.444-0.378-0.72 0.294-0.444z" fill="currentColor"></path>
+  <path d="m16.51 5.172-0.546 0.72 0.468 0.444 0.426-0.72-0.348-0.444z" fill="currentColor"></path>
+  <path d="m16.33 10.39-3.84 2.874" stroke="currentColor" stroke-linecap="round" stroke-width=".77"></path>
+  <path d="m15.82 13-2.91 0.828" stroke="currentColor" stroke-linecap="round" stroke-width=".77"></path>
+  <path d="m14.2 13.05-1.188 0.33 0.156 0.738 1.032-1.068z" fill="currentColor"></path>
+  <circle cx="12.03" cy="13.94" r=".77" stroke="currentColor" stroke-width=".77"></circle>
+</svg>

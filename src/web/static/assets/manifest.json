@@ -1,0 +1,242 @@
+{
+  "credits_spent": 0,
+  "generated": {
+    "empty-quiet": {
+      "animated": false,
+      "at": "2026-09-19T10:21:13+00:00",
+      "bytes": 5674,
+      "credits": 0,
+      "group": "brand",
+      "hash": "eeba56beec14",
+      "model": "arrow-2",
+      "request_id": "55bfe3ab76d645c1adfd3f786e1f6250",
+      "tokens": 5903
+    },
+    "icon-ehr": {
+      "animated": false,
+      "at": "2026-09-19T10:19:45+00:00",
+      "bytes": 905,
+      "credits": 0,
+      "group": "ui",
+      "hash": "19e7afbcce71",
+      "model": "arrow-2",
+      "request_id": "10cadc708ca04f289a6d4d74093cbb79",
+      "tokens": 3506
+    },
+    "icon-rehearse": {
+      "animated": false,
+      "at": "2026-09-19T10:20:43+00:00",
+      "bytes": 992,
+      "credits": 0,
+      "group": "ui",
+      "hash": "f457a1aa2f48",
+      "model": "arrow-2",
+      "request_id": "ca11a8cbe0bd483aa4a261395e408a2d",
+      "tokens": 3507
+    },
+    "icon-tool": {
+      "animated": false,
+      "at": "2026-09-19T10:20:05+00:00",
+      "bytes": 729,
+      "credits": 0,
+      "group": "ui",
+      "hash": "bef73d5a9c94",
+      "model": "arrow-2",
+      "request_id": "dbe2c4abb89740f9b3d4bd940c324b70",
+      "tokens": 3417
+    },
+    "icon-transcript": {
+      "animated": false,
+      "at": "2026-09-19T10:20:22+00:00",
+      "bytes": 894,
+      "credits": 0,
+      "group": "ui",
+      "hash": "2a96c30eae93",
+      "model": "arrow-2",
+      "request_id": "5746bef4413f43288e7cc17fb4e4cd0b",
+      "tokens": 3428
+    },
+    "mark-elturno": {
+      "group": "brand",
+      "model": "arrow-2",
+      "note": "restored previous logo"
+    },
+    "mark-socket-wizard": {
+      "animated": false,
+      "at": "2026-09-19T10:40:57+00:00",
+      "bytes": 2396,
+      "credits": 0,
+      "group": "brand",
+      "hash": "13d387f2b459",
+      "model": "arrow-2",
+      "request_id": "f3c979fa3c794a05856ff9e816f22ddf",
+      "tokens": 4277
+    },
+    "metric-interruption": {
+      "animated": false,
+      "at": "2026-09-19T10:19:26+00:00",
+      "bytes": 907,
+      "credits": 0,
+      "group": "metric",
+      "hash": "31b8ccc34ac8",
+      "model": "arrow-2",
+      "request_id": "60cd77b4aa0740b08db9aaa0457e365c",
+      "tokens": 3435
+    },
+    "metric-latency": {
+      "animated": false,
+      "at": "2026-09-19T10:18:50+00:00",
+      "bytes": 2247,
+      "credits": 0,
+      "group": "metric",
+      "hash": "25852c6c2a1f",
+      "model": "arrow-2",
+      "request_id": "14049fb1a4b84869816cc5b7ea087ee2",
+      "tokens": 4136
+    },
+    "metric-live": {
+      "animated": false,
+      "at": "2026-09-19T10:18:09+00:00",
+      "bytes": 1017,
+      "credits": 0,
+      "group": "metric",
+      "hash": "b3e7b0057819",
+      "model": "arrow-2",
+      "request_id": "e07d61a49edf44a88882eb8e6fa26716",
+      "tokens": 3449
+    },
+    "metric-peak": {
+      "animated": false,
+      "at": "2026-09-19T10:18:29+00:00",
+      "bytes": 1031,
+      "credits": 0,
+      "group": "metric",
+      "hash": "6cbac3ef92a6",
+      "model": "arrow-2",
+      "request_id": "5d81f63b30af42eab5874824ce8531bb",
+      "tokens": 3506
+    },
+    "metric-silent": {
+      "animated": false,
+      "at": "2026-09-19T10:19:09+00:00",
+      "bytes": 1093,
+      "credits": 0,
+      "group": "metric",
+      "hash": "5b13ae8643f3",
+      "model": "arrow-2",
+      "request_id": "e05a00a2cae74128b6ee95b7088ff046",
+      "tokens": 3597
+    },
+    "outcome-book": {
+      "animated": false,
+      "at": "2026-09-19T10:16:12+00:00",
+      "bytes": 924,
+      "credits": 0,
+      "group": "outcome",
+      "hash": "805860d5413b",
+      "model": "arrow-2",
+      "request_id": "837234efc36a4a63b616e1e41dd1ebca",
+      "tokens": 3376
+    },
+    "outcome-cancel": {
+      "animated": false,
+      "at": "2026-09-19T10:16:50+00:00",
+      "bytes": 847,
+      "credits": 0,
+      "group": "outcome",
+      "hash": "ca85c11e5fae",
+      "model": "arrow-2",
+      "request_id": "8d171c6a7f3e4f2d85293d589ef43473",
+      "tokens": 3437
+    },
+    "outcome-escalate": {
+      "animated": false,
+      "at": "2026-09-19T10:17:31+00:00",
+      "bytes": 997,
+      "credits": 0,
+      "group": "outcome",
+      "hash": "b9fc84c12ffd",
+      "model": "arrow-2",
+      "request_id": "064a1496a1e94e83b573705200c2445f",
+      "tokens": 3548
+    },
+    "outcome-no_action": {
+      "animated": false,
+      "at": "2026-09-19T10:17:51+00:00",
+      "bytes": 743,
+      "credits": 0,
+      "group": "outcome",
+      "hash": "f13bd6be5f03",
+      "model": "arrow-2",
+      "request_id": "536304fd1ae94fb4bf8885277acb4a17",
+      "tokens": 3413
+    },
+    "outcome-register": {
+      "animated": false,
+      "at": "2026-09-19T10:17:11+00:00",
+      "bytes": 1489,
+      "credits": 0,
+      "group": "outcome",
+      "hash": "28759df63bd0",
+      "model": "arrow-2",
+      "request_id": "595484d092d64cd594713ef12b23a2a3",
+      "tokens": 3778
+    },
+    "outcome-reschedule": {
+      "animated": false,
+      "at": "2026-09-19T10:16:32+00:00",
+      "bytes": 1614,
+      "credits": 0,
+      "group": "outcome",
+      "hash": "cd5fa115b3b3",
+      "model": "arrow-2",
+      "request_id": "b8c7529a5bbf408495bde5c902c32b21",
+      "tokens": 3836
+    },
+    "status-idle": {
+      "animated": false,
+      "at": "2026-09-19T10:11:03+00:00",
+      "bytes": 1373,
+      "credits": 0,
+      "group": "status",
+      "hash": "0a9a8979e9d2",
+      "model": "arrow-2",
+      "request_id": "c4a6a20b1af3462badb395f76a06a184",
+      "tokens": 3596
+    },
+    "status-listening": {
+      "animated": false,
+      "at": "2026-09-19T10:11:21+00:00",
+      "bytes": 747,
+      "credits": 0,
+      "group": "status",
+      "hash": "d97becb24e15",
+      "model": "arrow-2",
+      "request_id": "a9dba9c484c9413cb281a46f6fce7bc1",
+      "tokens": 3377
+    },
+    "status-speaking": {
+      "animated": false,
+      "at": "2026-09-19T10:12:01+00:00",
+      "bytes": 1208,
+      "credits": 0,
+      "group": "status",
+      "hash": "24a23260c791",
+      "model": "arrow-2",
+      "request_id": "a2e983dda459470dbb84c450aee9e44b",
+      "tokens": 3644
+    },
+    "status-thinking": {
+      "animated": false,
+      "at": "2026-09-19T10:11:43+00:00",
+      "bytes": 1860,
+      "credits": 0,
+      "group": "status",
+      "hash": "ed8513e13351",
+      "model": "arrow-2",
+      "request_id": "bf78b21925674814a3002ead8f64a758",
+      "tokens": 3986
+    }
+  },
+  "model": "arrow-2"
+}

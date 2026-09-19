@@ -1,4 +1,4 @@
-"""El Turno — the socket the clinic's calls arrive on, and the console over it."""
+"""Socket Wizard — the socket the clinic's calls arrive on, and the console over it."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
 )
-logger = logging.getLogger("elturno")
+logger = logging.getLogger("socketwizard")
 
 STATIC_DIR = Path(__file__).resolve().parent / "web" / "static"
 
@@ -65,7 +65,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info(
         "ready on :%s%s — stt=%s llm=%s tts=%s",
         settings.port, "/ws",
-        settings.stt_provider if settings.deepgram_api_key else "whisper-fallback",
+        settings.stt_active,
         settings.llm_model if settings.llm_api_key else "NONE",
         settings.tts_provider,
     )
@@ -93,7 +93,7 @@ async def _warm_voice_cache() -> None:
         logger.warning("tts cache not warmed: %s", exc)
 
 
-app = FastAPI(title="El Turno · Clínica Arenal", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Socket Wizard · Clínica Arenal", version="1.0.0", lifespan=lifespan)
 app.add_middleware(ConsoleGuard)
 app.include_router(twilio_ws.router)
 app.include_router(console_api.router)
@@ -101,7 +101,15 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/", include_in_schema=False)
+async def control() -> FileResponse:
+    """The control site: live floor, call history, rehearsal."""
+    return FileResponse(STATIC_DIR / "ops.html")
+
+
+@app.get("/console", include_in_schema=False)
 async def console() -> FileResponse:
+    """The original one-call-at-a-time console, kept for the deep read of a
+    single call. The control site links to it rather than replacing it."""
     return FileResponse(STATIC_DIR / "index.html")
 
 

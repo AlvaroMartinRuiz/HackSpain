@@ -22,6 +22,24 @@ from src.config import settings
 MAX_EVENTS_IN_MEMORY = 600
 MAX_FINISHED_CALLS = 60
 
+# What an agent is visibly doing, read off the events a call already emits, so
+# the fleet view costs the call path nothing. `agent_said` counts as speaking
+# rather than `agent_speaking` because it fires when the turn is decided — the
+# same reason CallSession.is_speaking counts synthesis as speech.
+ACTIVITY_BY_EVENT = {
+    "caller_speaking": "listening",
+    "stt_partial": "listening",
+    "stt_final": "thinking",
+    "interruption": "listening",
+    "llm": "thinking",
+    "tool_call": "thinking",
+    "clinic_call": "thinking",
+    "agent_said": "speaking",
+    "agent_speaking": "speaking",
+    "agent_turn_end": "idle",
+}
+ACTIVITIES = ("idle", "listening", "thinking", "speaking")
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
@@ -36,6 +54,9 @@ class LiveCall:
     ended_at: Optional[str] = None
     status: str = "ringing"
     stage: str = "greeting"
+    activity: str = "idle"
+    activity_since: float = field(default_factory=time.monotonic)
+    current_tool: Optional[str] = None
     language: str = "es"
     language_confidence: Optional[float] = None
     language_source: Optional[str] = None
@@ -74,6 +95,11 @@ class LiveCall:
             "ended_at": self.ended_at,
             "status": self.status,
             "stage": self.stage,
+            "activity": self.activity,
+            # How long it has been doing it: an agent thinking for eight seconds
+            # is the thing worth seeing on a wall, and a still figure hides it.
+            "activity_ms": 0 if self.ended_at else int((time.monotonic() - self.activity_since) * 1000),
+            "current_tool": self.current_tool,
             "language": self.language,
             "language_confidence": self.language_confidence,
             "language_source": self.language_source,
@@ -85,6 +111,8 @@ class LiveCall:
             "median_response_ms": _median(latencies),
             "patient": _patient_line(self.patient),
             "intent": self.intent,
+            "last_caller": _last_said(self.transcript, "caller"),
+            "last_agent": _last_said(self.transcript, "agent"),
             "actions": [
                 {"action": s["action"], "accepted": s.get("accepted"), "status": s.get("status")}
                 for s in self.submissions
@@ -208,11 +236,61 @@ class CallStore:
                 return call
         return None
 
+    def load(self, call_id: str) -> Optional[LiveCall]:
+        """Memory first; after a restart rebuild the transcript from sqlite events."""
+        found = self.get(call_id)
+        if found is not None:
+            return found
+        events = self.replay(call_id)
+        row = self._call_row(call_id)
+        if not events and row is None:
+            return None
+        call = LiveCall(
+            call_id=call_id,
+            from_number=row["from_number"] if row else None,
+            status=row["status"] if row else "finished",
+        )
+        if row:
+            call.started_at = row["started_at"] or call.started_at
+            call.ended_at = row["ended_at"]
+            if call.ended_at:
+                call.activity = "ended"
+        for event in events:
+            self._apply(call, event["kind"], event["payload"] or {})
+            call.events.append({
+                "call_id": call_id,
+                "seq": event["seq"],
+                "ts": event["ts"],
+                "kind": event["kind"],
+                "payload": event["payload"],
+            })
+        return call
+
+    def _call_row(self, call_id: str) -> Optional[dict[str, Any]]:
+        if self._db is None:
+            return None
+        with self._lock:
+            row = self._db.execute(
+                "SELECT from_number, started_at, ended_at, status FROM calls WHERE call_id = ?",
+                (call_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        from_number, started_at, ended_at, status = row
+        return {
+            "from_number": from_number,
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "status": status,
+        }
+
     def close_call(self, call_id: str, status: str = "finished") -> Optional[LiveCall]:
         call = self._live.pop(call_id, None)
         if call is None:
             return None
         call.status = status
+        call.activity = "ended"
+        call.current_tool = None
         call.ended_at = _now_iso()
         self._finished.appendleft(call)
         self._write_call(call)
@@ -241,6 +319,15 @@ class CallStore:
 
     def _apply(self, call: LiveCall, kind: str, payload: dict[str, Any]) -> None:
         """Keep the call's own view of itself in step with its events."""
+        activity = ACTIVITY_BY_EVENT.get(kind)
+        if activity is not None and activity != call.activity:
+            call.activity = activity
+            call.activity_since = time.monotonic()
+        if kind == "tool_call":
+            call.current_tool = payload.get("name")
+        elif kind in ("agent_said", "agent_turn_end"):
+            call.current_tool = None
+
         if kind == "stt_final":
             call.transcript.append({
                 "role": "caller", "text": payload.get("text", ""),
@@ -359,14 +446,24 @@ class CallStore:
         live = self.live_calls()
         recent = self.recent_calls()
         all_latencies: list[int] = []
+        llm_latencies: list[int] = []
+        tts_latencies: list[int] = []
+        interruptions = 0
         for call in live + recent:
             all_latencies.extend(call.metrics["response_ms"])
+            llm_latencies.extend(call.metrics["llm_ms"])
+            tts_latencies.extend(call.metrics["tts_first_byte_ms"])
+            interruptions += call.metrics["interruptions"]
 
         submitted = [call for call in recent if call.submissions]
         accepted = [
             call for call in recent
             if any(s.get("accepted") for s in call.submissions)
         ]
+        by_activity = {name: 0 for name in ACTIVITIES}
+        for call in live:
+            by_activity[call.activity] = by_activity.get(call.activity, 0) + 1
+
         return {
             "live": len(live),
             "peak_concurrency": self._peak_concurrency,
@@ -376,6 +473,11 @@ class CallStore:
             "silent_calls": len([c for c in recent if not c.submissions]),
             "median_response_ms": _median(all_latencies),
             "p90_response_ms": _percentile(all_latencies, 90),
+            "by_activity": by_activity,
+            "interruptions": interruptions,
+            "median_llm_ms": _median(llm_latencies),
+            "median_tts_first_byte_ms": _median(tts_latencies),
+            "calls_with_errors": len([c for c in live + recent if c.errors]),
         }
 
 
@@ -395,6 +497,14 @@ def _percentile(values: list[int], pct: int) -> Optional[int]:
     ordered = sorted(values)
     index = min(len(ordered) - 1, int(round((pct / 100) * (len(ordered) - 1))))
     return ordered[index]
+
+
+def _last_said(transcript: list[dict[str, Any]], role: str) -> Optional[str]:
+    """The last thing one side said, for a card that has one line to spare."""
+    for turn in reversed(transcript):
+        if turn.get("role") == role and turn.get("text"):
+            return str(turn["text"])[:180]
+    return None
 
 
 def _patient_line(patient: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:

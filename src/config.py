@@ -82,12 +82,21 @@ class Settings:
     console_token: str = field(default_factory=lambda: _env("CONSOLE_TOKEN"))
 
     # Speech to text
-    stt_provider: str = field(default_factory=lambda: _env("STT_PROVIDER", default="deepgram").lower())
+    stt_provider: str = field(default_factory=lambda: _env("STT_PROVIDER", default="elevenlabs").lower())
     deepgram_api_key: str = field(default_factory=lambda: _env("DEEPGRAM_API_KEY"))
     deepgram_model: str = field(default_factory=lambda: _env("DEEPGRAM_MODEL", default="nova-3"))
     deepgram_language: str = field(default_factory=lambda: _env("DEEPGRAM_LANGUAGE", default="multi"))
     stt_endpointing_ms: int = field(default_factory=lambda: _int("STT_ENDPOINTING_MS", 300))
     stt_utterance_end_ms: int = field(default_factory=lambda: _int("STT_UTTERANCE_END_MS", 1000))
+    # Digits over the phone are the sharpest scoring test in the set. Deepgram
+    # will emit "44556677" instead of "cuatro cuatro cinco…".
+    stt_numerals: bool = field(default_factory=lambda: _bool("STT_NUMERALS", True))
+    elevenlabs_stt_model: str = field(
+        default_factory=lambda: _env("ELEVENLABS_STT_MODEL", default="scribe_v2_realtime")
+    )
+    stt_filter_background: bool = field(
+        default_factory=lambda: _bool("STT_FILTER_BACKGROUND", True)
+    )
 
     # Language model
     llm_provider: str = field(default_factory=lambda: _env("LLM_PROVIDER", default="openai").lower())
@@ -102,9 +111,9 @@ class Settings:
     llm_extra_headers: dict = field(default_factory=lambda: _headers("LLM_EXTRA_HEADERS"))
 
     # Text to speech
-    # Aura is metered on the same key as the transcriber and costs a fraction of
-    # ElevenLabs, so it is the default; switch to elevenlabs for scored runs.
-    tts_provider: str = field(default_factory=lambda: _env("TTS_PROVIDER", default="deepgram").lower())
+    # ElevenLabs on the scored path; Aura (`TTS_PROVIDER=deepgram`) is the cheap
+    # practice voice and the automatic fallback if Flash 429s.
+    tts_provider: str = field(default_factory=lambda: _env("TTS_PROVIDER", default="elevenlabs").lower())
     deepgram_tts_model_es: str = field(
         default_factory=lambda: _env("DEEPGRAM_TTS_MODEL_ES", default="aura-2-silvia-es")
     )
@@ -146,6 +155,18 @@ class Settings:
     # Synthesise the greeting and fixed lines at start-up (~300 characters).
     tts_warm_cache: bool = field(default_factory=lambda: _bool("TTS_WARM_CACHE", True))
 
+    # Design assets
+    # Quiver draws SVG, not data, so it is called by scripts/generate_assets.py
+    # at build time and never on a page load. The console reads the result off
+    # disk, which is why it still has its icons with no key and no wifi.
+    quiver_api_key: str = field(default_factory=lambda: _env("QUIVER_API_KEY", "QUIVERAI_API_KEY"))
+    quiver_base_url: str = field(
+        default_factory=lambda: _env("QUIVER_BASE_URL", default="https://api.quiver.ai").rstrip("/")
+    )
+    # Empty on purpose: the generator asks /v1/models what this key may use
+    # rather than pinning an id that might not exist on the account.
+    quiver_model: str = field(default_factory=lambda: _env("QUIVER_MODEL"))
+
     # Observability
     db_path: str = field(default_factory=lambda: _env("DB_PATH", default=str(DATA_DIR / "calls.db")))
     catalog_path: str = field(
@@ -156,19 +177,40 @@ class Settings:
     def configured(self) -> bool:
         return bool(self.api_key and self.api_base_url)
 
+    @property
+    def stt_active(self) -> str:
+        if self.stt_provider == "elevenlabs" and self.elevenlabs_api_key:
+            return "elevenlabs"
+        if self.stt_provider == "deepgram" and self.deepgram_api_key:
+            return "deepgram"
+        if self.llm_api_key:
+            return "whisper"
+        return "none"
+
+    @property
+    def stt_model_label(self) -> str:
+        if self.stt_active == "elevenlabs":
+            return self.elevenlabs_stt_model
+        if self.stt_active == "deepgram":
+            return self.deepgram_model
+        if self.stt_active == "whisper":
+            return "whisper-1"
+        return "none"
+
     def missing_voice_keys(self) -> list[str]:
         missing: list[str] = []
-        if (
-            self.stt_provider == "deepgram" or self.tts_provider == "deepgram"
-        ) and not self.deepgram_api_key:
-            missing.append("DEEPGRAM_API_KEY")
         if not self.llm_api_key:
             missing.append("LLM_API_KEY")
+        if self.stt_provider == "deepgram" and not self.deepgram_api_key:
+            missing.append("DEEPGRAM_API_KEY")
+        if self.stt_provider == "elevenlabs" and not self.elevenlabs_api_key:
+            missing.append("ELEVENLABS_API_KEY")
         if self.tts_provider == "deepgram" and not self.deepgram_api_key:
             if "DEEPGRAM_API_KEY" not in missing:
                 missing.append("DEEPGRAM_API_KEY")
         if self.tts_provider == "elevenlabs" and not self.elevenlabs_api_key:
-            missing.append("ELEVENLABS_API_KEY")
+            if "ELEVENLABS_API_KEY" not in missing:
+                missing.append("ELEVENLABS_API_KEY")
         if self.tts_provider == "cartesia" and not self.cartesia_api_key:
             missing.append("CARTESIA_API_KEY")
         if self.tts_provider == "openai" and not self.llm_api_key:

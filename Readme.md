@@ -10,10 +10,10 @@
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — cómo está construido y qué resuelve cada pieza
 - [RUNBOOK.md](./RUNBOOK.md) — arrancar, exponer con ngrok, depurar, y la demo para el jurado
 
-## Nuestra solución — El Turno
+## Our solution — Socket Wizard
 
-Un servidor WebSocket que habla Twilio Media Streams, con una consola en vivo
-sobre el mismo puerto.
+A WebSocket server that speaks Twilio Media Streams, with a live console
+on the same port.
 
 ```powershell
 # Windows

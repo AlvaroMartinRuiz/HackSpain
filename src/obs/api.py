@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from typing import Any, Optional
 
 import uuid
@@ -21,8 +23,11 @@ from src.voice.tts import active_provider_name
 
 router = APIRouter(prefix="/api/console")
 
+ASSET_DIR = Path(__file__).resolve().parent.parent / "web" / "static" / "assets"
+
 _catalog: Optional[Catalog] = None
 _llm: Optional[LLMClient] = None
+_assets_cache: Optional[tuple[float, dict[str, Any]]] = None
 
 
 def configure(catalog: Catalog, llm: LLMClient) -> None:
@@ -42,8 +47,8 @@ async def overview() -> dict[str, Any]:
             "public_console_url": settings.public_console_url or None,
         },
         "providers": {
-            "stt": settings.stt_provider if settings.deepgram_api_key else "whisper (fallback)",
-            "stt_model": settings.deepgram_model,
+            "stt": settings.stt_active,
+            "stt_model": settings.stt_model_label,
             "llm": f"{settings.llm_provider}:{settings.llm_model}" if settings.llm_api_key else "not configured",
             "tts": active_provider_name(),
         },
@@ -67,16 +72,125 @@ def _recent_for_console() -> list[dict[str, Any]]:
     return recent
 
 
+@router.get("/assets")
+async def design_assets() -> dict[str, Any]:
+    """The Quiver-drawn icon set, inlined in one response.
+
+    Inlined rather than linked as <img> so the icons inherit `currentColor` and
+    change with the theme, and fetched in one request so a dashboard opening
+    twenty icons does not open twenty connections. An empty reply is a normal
+    answer: the dashboard draws CSS shapes instead.
+    """
+    global _assets_cache
+
+    if not ASSET_DIR.is_dir():
+        return {"icons": {}, "manifest": {}, "generated": False}
+
+    # Windows does not bump a directory's mtime when a file inside it changes,
+    # so the cache key is the newest file mtime rather than the folder's.
+    stamp = max(
+        (path.stat().st_mtime for path in ASSET_DIR.iterdir()),
+        default=ASSET_DIR.stat().st_mtime,
+    )
+    if _assets_cache is not None and _assets_cache[0] == stamp:
+        return _assets_cache[1]
+
+    icons: dict[str, str] = {}
+    for path in sorted(ASSET_DIR.glob("*.svg")):
+        try:
+            icons[path.stem] = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+
+    manifest: dict[str, Any] = {}
+    manifest_path = ASSET_DIR / "manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            manifest = {}
+
+    payload = {
+        "icons": icons,
+        "generated": bool(icons),
+        "manifest": {
+            "model": manifest.get("model"),
+            "credits_spent": manifest.get("credits_spent", 0),
+            "animated": sorted(
+                name for name, row in (manifest.get("generated") or {}).items()
+                if row.get("animated")
+            ),
+        },
+    }
+    _assets_cache = (stamp, payload)
+    return payload
+
+
 @router.get("/calls/{call_id}")
 async def call_detail(call_id: str) -> dict[str, Any]:
     recordings = tape.available(call_id)
-    call = store.get(call_id)
+    call = store.load(call_id)
     if call is not None:
         return {**call.detail(), "recordings": recordings}
     events = store.replay(call_id)
     if not events:
         raise HTTPException(status_code=404, detail="no such call")
-    return {"call_id": call_id, "replay_only": True, "events": events, "recordings": recordings}
+    # History-only calls are not still in memory, so rebuild the views the
+    # console needs from the event log — especially the transcript.
+    return {
+        "call_id": call_id,
+        "replay_only": True,
+        "events": events,
+        "recordings": recordings,
+        **_detail_from_events(events),
+    }
+
+
+def _detail_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Reconstruct transcript / decisions / tools from a durable event log."""
+    transcript: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
+    tool_calls: list[dict[str, Any]] = []
+    clinic_calls: list[dict[str, Any]] = []
+    submissions: list[dict[str, Any]] = []
+    patient_full: Optional[dict[str, Any]] = None
+    for event in events:
+        kind = event.get("kind")
+        payload = event.get("payload") or {}
+        ts = event.get("ts")
+        if kind == "stt_final":
+            transcript.append({"role": "caller", "text": payload.get("text", ""), "ts": ts})
+        elif kind == "agent_said":
+            transcript.append({"role": "agent", "text": payload.get("text", ""), "ts": ts})
+        elif kind == "interruption":
+            transcript.append({
+                "role": "caller", "cut": True, "ts": ts,
+                "text": f"⟨cuts the agent⟩ {payload.get('heard') or ''}".strip(),
+            })
+        elif kind == "decision":
+            decisions.append({**payload, "ts": ts})
+        elif kind == "tool_call":
+            tool_calls.append(payload)
+        elif kind == "clinic_call":
+            clinic_calls.append(payload)
+        elif kind == "submit":
+            submissions.append(payload)
+        elif kind == "patient_identified":
+            patient_full = payload.get("patient")
+    actions = [
+        {"action": s.get("action"), "accepted": s.get("accepted"), "status": s.get("status")}
+        for s in submissions
+    ]
+    return {
+        "transcript": transcript,
+        "decisions": decisions,
+        "tool_calls": tool_calls,
+        "clinic_calls": clinic_calls,
+        "submissions": submissions,
+        "actions": actions,
+        "patient_full": patient_full,
+        "turns": sum(1 for t in transcript if t.get("role") == "agent"),
+    }
 
 
 @router.get("/calls/{call_id}/audio/{track}")

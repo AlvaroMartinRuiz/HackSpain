@@ -27,9 +27,10 @@ _CATALAN_PHRASES = (
     "d acord",
     "moltes gracies",
 )
+# Distinctive only: "hora" and "necessito" are ordinary Spanish on a clinic line.
 _CATALAN_WORDS = {
     "voldria", "demanar", "metge", "capcalera", "tingueu", "gracies",
-    "necessito", "hora", "aquesta", "aquest", "puc", "soc", "meva", "meu",
+    "aquesta", "aquest", "puc", "soc", "meva", "meu",
 }
 _ENGLISH_WORDS = {
     "hello", "appointment", "please", "thanks", "need", "doctor", "earliest",
@@ -57,6 +58,12 @@ def decide_language(
 
     english_hits = len(words & _ENGLISH_WORDS)
     spanish_hits = len(words & _SPANISH_WORDS)
+    # A lone "Hello?" is how many English callers start. It is not a line check,
+    # and Deepgram often has no hint yet.
+    if words and words <= {"hello", "hi", "hey"} and catalan_hits == 0 and spanish_hits == 0:
+        return LanguageDecision("en", 0.78, "text_markers")
+    if words and words <= {"hola"} and catalan_hits == 0 and english_hits == 0:
+        return LanguageDecision("es", 0.78, "text_markers")
     hint = (deepgram_hint or "").lower()[:2]
     # Once the stream is locked to Catalan its hint naturally remains ``ca``;
     # strong text evidence is what lets a caller switch back mid-call.

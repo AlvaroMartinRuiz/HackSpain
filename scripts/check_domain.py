@@ -14,12 +14,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
 from src.domain.catalog import Catalog, age_months  # noqa: E402
-from src.domain.engine import SchedulingEngine  # noqa: E402
+from src.domain.engine import SchedulingEngine, Slot, SlotSearch  # noqa: E402
 from src.domain.gazetteer import locate  # noqa: E402
 from src.domain.identity import (  # noqa: E402
     normalize_email,
     normalize_phone,
     parse_national_id,
+    peel_insurer_from_email,
+    split_id_and_phone,
 )
 from src.domain.outcomes import pick_blocking_reason  # noqa: E402
 from src.domain.timeref import MADRID, resolve_when  # noqa: E402
@@ -50,9 +52,33 @@ def main() -> int:
     check("expected letter derived", parse_national_id("12345678A")["expected_letter"], "Z")
     check("NIE with prefix", parse_national_id("X1234567L")["valid"], True)
     check("spaces and dashes ignored", parse_national_id("12.345.678-Z")["value"], "12345678Z")
+    missing = parse_national_id("12345678")
+    check("omitted letter is flagged", missing["letter_missing"], True)
+    check("omitted letter is still derived", missing["value"], "12345678Z")
+    check("wrong letter is not 'missing'", parse_national_id("12345678A")["letter_missing"], False)
+    spoken = parse_national_id("cuatro cuatro cinco cinco seis seis siete siete zeta")
+    check("spoken digits are read", spoken["value"] and str(spoken["value"]).startswith("44556677"), True)
+    nie = parse_national_id("ye cuatro nueve nueve siete dos siete cero eme")
+    check("spoken NIE keeps the prefix", str(nie["value"] or "").startswith("Y4997270"), True)
+
+    section("STT gluing the id to the phone, and the insurer to the email")
+    check(
+        "16-digit NIE+phone split",
+        split_id_and_phone("6946799620955061", "6946799620955061"),
+        ("X6946799", "620955061"),
+    )
+    check(
+        "NIE with letters still glued to the mobile",
+        split_id_and_phone("X6946799V620955061", ""),
+        ("X6946799V", "620955061"),
+    )
+    peeled, insurer = peel_insurer_from_email("victoria.vasquez99@outlook.escinitas")
+    check("outlook.escinitas peels to outlook.es", peeled, "victoria.vasquez99@outlook.es")
+    check("cinitas on the domain is Sanitas", insurer, "sanitas")
 
     section("Phones fold to nine digits, whatever arrives")
-    for raw in ("+34612345678", "0034612345678", "612 345 678", "612345678"):
+    for raw in ("+34612345678", "0034612345678", "612 345 678", "612345678",
+                "seis uno dos tres cuatro cinco seis siete ocho"):
         check(f"{raw!r}", normalize_phone(raw), "612345678")
 
     section("Dictated emails")
@@ -71,7 +97,37 @@ def main() -> int:
     section("Insurance names survive ordinary speech-recognition errors")
     engine = SchedulingEngine(None, catalog)  # type: ignore[arg-type]
     check("Sinitas resolves to Sanitas", engine.resolve_insurer("Sinitas"), "sanitas")
+    check("Zinitas resolves to Sanitas", engine.resolve_insurer("Zinitas"), "sanitas")
     check("Nueva Mutua keeps its separator", engine.resolve_insurer("Nueva Mutua"), "nueva_mutua")
+
+    fields, problems = engine.plan_registration({
+        "given_name": "Elena",
+        "first_surname": "Ruiz",
+        "second_surname": "Lopez",
+        "national_id": "12345678",
+        "date_of_birth": "1980-01-15",
+        "phone": "612345678",
+        "email": "elena.ruiz@gmail.com",
+        "insurer": "Sanitas",
+    })
+    check("registration infers a missing DNI letter", problems, [])
+    check("inferred DNI in the payload", (fields or {}).get("national_id"), "12345678Z")
+
+    fields, problems = engine.plan_registration({
+        "given_name": "Victoria",
+        "first_surname": "Vasquez",
+        "second_surname": "Delgado",
+        "national_id": "6946799620955061",
+        "date_of_birth": "1986-11-11",
+        "phone": "6946799620955061",
+        "email": "victoria.vasquez99@outlook.escinitas",
+        "insurer": "Zinitas",
+    })
+    check("glued NIE+phone+Zinitas registers", problems, [])
+    check("split NIE in the payload", (fields or {}).get("national_id"), parse_national_id("X6946799")["value"])
+    check("split phone in the payload", (fields or {}).get("phone"), "620955061")
+    check("peeled email in the payload", (fields or {}).get("email"), "victoria.vasquez99@outlook.es")
+    check("Zinitas in the payload", (fields or {}).get("insurer"), "sanitas")
 
     section("Appointment type follows the specialty and the record, never the request")
     cases = [
@@ -137,6 +193,22 @@ def main() -> int:
             check(f"{phrase!r} part", spec.part_of_day, expected_part)
 
     check("'lo antes posible' asks for the soonest", resolve_when("lo antes posible", now).soonest, True)
+    first_monday = resolve_when("First thing Monday", now)
+    check("'First thing Monday' lands on the 21st", first_monday.target_date, date(2026, 9, 21))
+    check("'First thing Monday' is morning", first_monday.part_of_day, "morning")
+    check("'First thing Monday' is first_thing", first_monday.first_thing, True)
+
+    opening = datetime(2026, 9, 21, 8, 45, tzinfo=MADRID)
+    later_morning = datetime(2026, 9, 21, 9, 30, tzinfo=MADRID)
+
+    def _slot(moment: datetime, provider: str = "p1") -> Slot:
+        return Slot(provider, "Doc", "orthopaedics", "sur", "orthopaedic_review",
+                    moment, 15, ("sanitas",))
+
+    search = SlotSearch(when=first_monday)
+    chosen, exact = engine._pick([_slot(later_morning), _slot(opening, "p2")], first_monday, search)
+    check("first thing keeps only the opening minute", [slot.start for slot in chosen], [opening])
+    check("first thing is still an exact-day match", exact, True)
 
     section("Closures")
     check("Sunday is shut everywhere", catalog.is_open(date(2026, 9, 20)), False)
@@ -150,12 +222,18 @@ def main() -> int:
     )
 
     section("Nearest site, by straight-line distance")
+    engine = SchedulingEngine(None, catalog)  # type: ignore[arg-type]
     for where, expected in [
         ("Calle de Madrid 54, en Getafe", "sur"),
         ("Alberto Alcocer, Chamartín", "norte"),
         ("Gran Vía, Madrid centro", "centro"),
         ("estoy en Alcobendas", "norte"),
         ("vivo en Leganés", "sur"),
+        ("I'm right in the centre, at Calle de Preciados 3, by Puerta del Sol", "centro"),
+        ("I'm at Paseo de la Castellana 189, at Plaza de Castilla", "norte"),
+        ("I'm in Getafe, at Calle de Madrid 54", "sur"),
+        ("Calle de Preciados 3, 28013 Madrid", "centro"),
+        ("Paseo de la Castellana 189, 28046 Madrid", "norte"),
     ]:
         located = locate(where)
         if located is None:
@@ -164,6 +242,37 @@ def main() -> int:
         _place, latitude, longitude = located
         ranked = catalog.rank_locations_by_distance(latitude, longitude)
         check(where, ranked[0][0].id, expected)
+
+    alcala_street = locate("Calle de Alcalá 45, Madrid")
+    check(
+        "Calle de Alcalá is Madrid, not Alcalá de Henares",
+        None if alcala_street is None else alcala_street[0] != "alcala de henares",
+        True,
+    )
+    check(
+        "Alcalá de Henares still resolves as itself",
+        None if locate("estoy en Alcalá de Henares") is None
+        else locate("estoy en Alcalá de Henares")[0],
+        "alcala de henares",
+    )
+
+    gynae_from_getafe = engine.nearest_site(
+        "I'm in Getafe, at Calle de Madrid 54", "gynaecology"
+    )
+    check(
+        "gynaecology from Getafe is Centro, which can serve it",
+        (gynae_from_getafe.get("nearest_serving") or {}).get("location_id"),
+        "centro",
+    )
+    physio_from_sol = engine.nearest_site(
+        "I'm right in the centre, at Calle de Preciados 3, by Puerta del Sol",
+        "physiotherapy",
+    )
+    check(
+        "physiotherapy from Sol is Sur, the only site that has it",
+        (physio_from_sol.get("nearest_serving") or {}).get("location_id"),
+        "sur",
+    )
 
     section("ASISA can never book physiotherapy: it is only at Sur, which ASISA does not cover")
     physio_sites = catalog.locations_serving("physiotherapy")

@@ -120,9 +120,11 @@ SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Real availability for one patient. Returns numbered options you can read out, "
                 "or the rule that forbids it. Say the time phrase exactly as the caller said it "
-                "in `when` — it is resolved against the clock in Madrid. Never booked for the "
-                "same day. Name the patient: slots carry their appointment type and their plan, "
-                "so searching under the wrong person returns the wrong answer."
+                "in `when` — it is resolved against the clock in Madrid. If they later name a "
+                "day or say 'first thing' / 'a primera hora', call again with that phrase; do "
+                "not book a slot from a previous 'soonest' list. Never booked for the same day. "
+                "Name the patient: slots carry their appointment type and their plan, so "
+                "searching under the wrong person returns the wrong answer."
             ),
             "parameters": {
                 "type": "object",
@@ -166,7 +168,10 @@ SCHEMAS: list[dict[str, Any]] = [
             "name": "nearest_site",
             "description": (
                 "Which site is closest to where the caller says they are, and whether it can "
-                "serve what they need. Pass the address or town as they said it."
+                "serve what they need. Pass the address, street, plaza or town as they said it. "
+                "Always call this when they describe a place instead of naming Centro, Norte or "
+                "Sur. Book at `nearest_serving`, not at the geographically closest site if that "
+                "one cannot do what they asked."
             ),
             "parameters": {
                 "type": "object",
@@ -261,10 +266,12 @@ SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "register_new_patient",
             "description": (
-                "Put a caller the directory does not know on file, in two steps. First call it "
-                "without `confirmed`: nothing is sent, and it hands back the details spelled out "
-                "for you to read back. Once the caller says they are right, call it again with "
-                "the same details and confirmed=true. One wrong character fails the record. "
+                "Put a caller the directory does not know on file. Call as soon as every field "
+                "has been heard, including a missing DNI/NIE letter — it is re-derived from the "
+                "digits. If STT glued the id and the phone into one number, pass both as heard. "
+                "The first call sends nothing: it hands back the details spelled out for you to "
+                "read back once. When the caller says they are right, call it again with the same "
+                "details and confirmed=true. One wrong character fails the record. "
                 "Nothing is booked."
             ),
             "parameters": {
@@ -362,6 +369,8 @@ class ToolBox:
         # spoken surname itself and skip the ambiguity find_doctor exists to
         # surface.
         self.resolved_providers: set[str] = set()
+        self.registration_attempted = False
+        self.last_register_fields: Optional[dict[str, Any]] = None
 
     def schemas(self) -> list[dict[str, Any]]:
         return SCHEMAS
@@ -526,7 +535,27 @@ class ToolBox:
                         "Direct price questions to the insurer without inventing a figure."}
 
     async def _tool_nearest_site(self, args: dict[str, Any]) -> dict[str, Any]:
-        return self.engine.nearest_site(str(args.get("where", "")), args.get("specialty_id"))
+        result = self.engine.nearest_site(str(args.get("where", "")), args.get("specialty_id"))
+        serving = result.get("nearest_serving") or {}
+        if not result.get("resolved"):
+            result["guidance"] = (
+                "Could not place that address. Ask for the town or district, then call again."
+            )
+            return result
+        location_id = serving.get("location_id")
+        if not location_id:
+            result["guidance"] = (
+                "No site can serve that specialty. Tell the caller so, and call "
+                "end_without_booking if they still want it."
+            )
+            return result
+        result["guidance"] = (
+            "Tell the caller which site that is, in one sentence. Then pass "
+            f"`location_id={location_id}` to find_appointments. Do not pick a site from memory "
+            "or from the addresses in the briefing — the closest site that cannot serve them "
+            "is the wrong answer."
+        )
+        return result
 
     # ---- availability -------------------------------------------------
 
@@ -579,11 +608,28 @@ class ToolBox:
         if rerouted:
             specialty_id = rerouted
 
+        location_id = args.get("location_id")
+        if location_id and specialty_id:
+            serving = self.catalog.locations_serving(specialty_id)
+            if serving and location_id not in serving:
+                return {
+                    "options": [],
+                    "location_cannot_serve": True,
+                    "requested_location": location_id,
+                    "locations_that_serve": sorted(serving),
+                    "guidance": (
+                        f"{location_id} has no {specialty_id}. The sites that do are "
+                        f"{sorted(serving)}. Tell the caller the closest of those cannot do "
+                        "what they need, then search again with one of `locations_that_serve` "
+                        "(the nearest from nearest_site, if you have it)."
+                    ),
+                }
+
         search = await self.engine.find_slots(
             patient_id=self.patient.get("patient_id"),
             specialty_id=specialty_id,
             provider_id=provider_id,
-            location_id=args.get("location_id"),
+            location_id=location_id,
             when=args.get("when"),
             part_of_day=args.get("part_of_day"),
             language=language,
@@ -656,6 +702,8 @@ class ToolBox:
                 + ("" if search.part_of_day_possible else
                    "This specialty has no appointments at that time of day at all — tell them "
                    "that plainly instead of implying there might be. ")
+                + ("These are the first appointments that morning — offer the earliest. "
+                   if search.when and search.when.first_thing else "")
                 + ("Mention what `notes` says before offering these. " if search.notes else "")
                 + "Then call book_slot with the option number they choose."
             ),
@@ -760,11 +808,18 @@ class ToolBox:
                             "a caller cancelling two appointments says so here."}
 
     async def _tool_register_new_patient(self, args: dict[str, Any]) -> dict[str, Any]:
+        self.registration_attempted = True
+        self.last_register_fields = dict(args)
+        # A failed directory lookup is expected on a register call; it is not the outcome.
+        if self.last_reason == "patient_not_found":
+            self.last_reason = None
         fields, problems = self.engine.plan_registration(args)
         if fields is None:
             return {"registered": False, "problems": problems,
-                    "guidance": "Ask the caller to confirm exactly these details, then call again. "
-                                "For the id, read the digits back and confirm the final letter."}
+                    "guidance": "Ask only for the fields in `problems`, then call again. "
+                                "A missing check letter is filled in from the digits — do not "
+                                "hold the call to hear it. If the id and phone arrived as one "
+                                "number, pass them as heard."}
 
         if not args.get("confirmed") or fields != self.pending_registration:
             # A corrected detail changes the fields, which lands back here: what
@@ -914,14 +969,15 @@ class ToolBox:
         return any(a.get("appointment_id") == appointment_id for a in upcoming)
 
     def _policy_for(self, slot: Slot) -> Optional[str]:
-        payable = set(slot.payable_with)
+        payable = [plan for plan in slot.payable_with if plan]
         own = (self.patient or {}).get("insurer")
         if own and own in payable:
             return own
         for insurer in self.named_insurers:
             if insurer in payable:
                 return insurer
-        return sorted(payable)[0] if payable else None
+        unique = list(dict.fromkeys(payable))
+        return unique[0] if len(unique) == 1 else None
 
     def _clean_reason(self, reason: Any) -> str:
         candidate = str(reason or "").strip()
@@ -931,11 +987,19 @@ class ToolBox:
             return self.last_reason
         return "out_of_scope"
 
+    def completable_registration(self) -> Optional[dict[str, Any]]:
+        """A registration payload that was heard but never accepted, if one exists."""
+        if not self.last_register_fields:
+            return None
+        fields, problems = self.engine.plan_registration(self.last_register_fields)
+        return fields if fields and not problems else None
+
     def fallback_reason(self) -> str:
         """The reason to report if the call ends before the model closes it."""
         if self.last_reason and is_valid_reason(self.last_reason):
-            return self.last_reason
-        if self.patient is None:
+            if not (self.registration_attempted and self.last_reason == "patient_not_found"):
+                return self.last_reason
+        if self.patient is None and not self.registration_attempted:
             # Nobody was ever looked up: not a caller we failed to find, but a
             # call that was never about booking (a request for another
             # patient's data, a sales call). Problem 14 expects out_of_scope.

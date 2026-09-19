@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config import settings  # noqa: E402
 from src.agent.brain import Agent  # noqa: E402
 from src.voice.language import decide_language  # noqa: E402
-from src.voice.stt import DeepgramTranscriber  # noqa: E402
+from src.voice.stt import DeepgramTranscriber, ElevenLabsTranscriber  # noqa: E402
 from src.voice.tts import (  # noqa: E402
     deepgram_model_for_language,
     elevenlabs_model_for_language,
@@ -35,6 +35,8 @@ def main() -> int:
         ("Spanish text", "Hola, necesito una cita por la mañana, por favor.", "es", "es"),
         ("Catalan text", "Bon dia, voldria demanar hora amb el metge, si us plau.", "es", "ca"),
         ("English text", "Hello, I need the earliest appointment please.", "en", "en"),
+        ("English hello", "Hello?", None, "en"),
+        ("Spanish hora is not Catalan", "Necesito hora por la mañana, por favor.", None, "es"),
     ]
     for label, text, hint, expected in samples:
         total += 1
@@ -42,10 +44,40 @@ def main() -> int:
         passed += check(label, decision.code == expected,
                         f"{decision.code} {decision.confidence:.2f} via {decision.source}")
 
+    from src.agent.brain import _liveness_response, _ready_to_speak
+
+    total += 1
+    passed += check("Hello is not a line check", _liveness_response("Hello?", "es") is None)
+    total += 1
+    passed += check(
+        "Are you there is a line check in English",
+        (_liveness_response("Are you still there?", "es") or "").startswith("Yes"),
+    )
+    total += 1
+    passed += check("Short question speaks now", _ready_to_speak(["¿Hablo con Ella Smith?"]))
+    total += 1
+    passed += check("Filler waits", not _ready_to_speak(["Thank you."]))
+
     total += 1
     passed += check(
         "Catalan STT locks to ca",
         parse_qs(urlparse(DeepgramTranscriber(_noop, _noop)._url("ca")).query)["language"] == ["ca"],
+    )
+
+    qs = parse_qs(urlparse(DeepgramTranscriber(_noop, _noop)._url()).query)
+    total += 1
+    passed += check("numerals are on", qs.get("numerals") == ["true"])
+
+    scribe = parse_qs(urlparse(ElevenLabsTranscriber(_noop, _noop)._url()).query)
+    total += 1
+    passed += check("Scribe listens to µ-law 8 kHz", scribe.get("audio_format") == ["ulaw_8000"])
+    total += 1
+    passed += check("Scribe commits on VAD", scribe.get("commit_strategy") == ["vad"])
+    total += 1
+    passed += check(
+        "Catalan Scribe lock",
+        parse_qs(urlparse(ElevenLabsTranscriber(_noop, _noop)._url("ca")).query).get("language_code")
+        == ["ca"],
     )
 
     total += 1

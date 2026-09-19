@@ -24,7 +24,7 @@ function renderOverview(overview) {
   el("clinic-name").textContent = overview.clinic || "Clínica Arenal";
   const p = overview.providers || {};
   const pills = [
-    `<span class="pill">escucha <b>${escapeHtml(p.stt)}</b></span>`,
+    `<span class="pill">escucha <b>${escapeHtml(p.stt)}</b>${p.stt_model ? ` · ${escapeHtml(p.stt_model)}` : ""}</span>`,
     `<span class="pill">modelo <b>${escapeHtml(p.llm)}</b></span>`,
     `<span class="pill">voz <b>${escapeHtml(p.tts)}</b></span>`,
     `<span class="pill">endpoint <b>${escapeHtml(
@@ -103,13 +103,30 @@ function callItem(call) {
 
 // ---- selected call --------------------------------------------------
 
+function hydrateDetail(detail) {
+  if (!detail || (detail.transcript && detail.transcript.length) || !(detail.events || []).length) {
+    return detail;
+  }
+  const transcript = [];
+  for (const event of detail.events) {
+    const payload = event.payload || {};
+    if (event.kind === "stt_final" && payload.text) {
+      transcript.push({ role: "caller", text: payload.text });
+    } else if (event.kind === "agent_said" && payload.text) {
+      transcript.push({ role: "agent", text: payload.text });
+    }
+  }
+  detail.transcript = transcript;
+  return detail;
+}
+
 async function selectCall(callId) {
   state.selected = callId;
   renderCallLists();
   try {
     const response = await fetch(`/api/console/calls/${encodeURIComponent(callId)}`);
     if (!response.ok) return;
-    state.detail = await response.json();
+    state.detail = hydrateDetail(await response.json());
     renderDetail();
   } catch (error) {
     /* the live feed will fill it in */
@@ -303,7 +320,15 @@ function applyEvent(message) {
       break;
   }
 
-  if (summary) Object.assign(detail, summary);
+  if (summary) {
+    for (const [key, value] of Object.entries(summary)) {
+      if (key === "tool_calls" || key === "clinic_calls" || key === "errors"
+          || key === "transcript" || key === "decisions" || key === "submissions") {
+        continue;
+      }
+      detail[key] = value;
+    }
+  }
   renderDetail();
 }
 

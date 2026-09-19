@@ -19,6 +19,8 @@ from src.domain.identity import (
     normalize_phone,
     normalize_text,
     parse_national_id,
+    peel_insurer_from_email,
+    split_id_and_phone,
 )
 from src.domain.outcomes import pick_blocking_reason
 from src.domain.timeref import (
@@ -433,6 +435,13 @@ class SchedulingEngine:
 
         exact = ordered([slot for slot in slots if on_day(slot) and in_part(slot)])
         if exact:
+            if spec.first_thing:
+                opening = exact[0].start
+                kept = [slot for slot in exact if slot.start == opening]
+                search.trace.append(
+                    f"first thing: kept {len(kept)} slot(s) at {opening.strftime('%H:%M')}"
+                )
+                return kept, True
             return exact, True
 
         wrong_hour = ordered([slot for slot in slots if on_day(slot)]) if target and part else []
@@ -606,39 +615,54 @@ class SchedulingEngine:
     def resolve_insurer(self, spoken: Any) -> Optional[str]:
         """Map a spoken plan name to a clinic id, tolerating one STT vowel."""
         key = normalize_text(str(spoken or "")).replace(" ", "_")
+        if not key:
+            return None
         aliases: dict[str, str] = {}
         for plan_id, plan in self.catalog.plans.items():
             aliases[normalize_text(plan_id).replace(" ", "_")] = plan_id
             name = normalize_text(str(plan.get("name") or "")).replace(" ", "_")
             if name:
                 aliases[name] = plan_id
+        for stt, plan_id in (
+            ("sinitas", "sanitas"),
+            ("zinitas", "sanitas"),
+            ("cinitas", "sanitas"),
+            ("escinitas", "sanitas"),
+            ("a_sisa", "asisa"),
+            ("a_deslas", "adeslas"),
+            ("nueva_mutua_sanitaria", "nueva_mutua"),
+        ):
+            if plan_id in self.catalog.plans:
+                aliases.setdefault(stt, plan_id)
         if key in aliases:
             return aliases[key]
-        close = get_close_matches(key, aliases, n=1, cutoff=0.82)
+        close = get_close_matches(key, aliases, n=1, cutoff=0.75)
         return aliases[close[0]] if close else None
 
     def plan_registration(self, fields: dict[str, Any]) -> tuple[Optional[dict[str, Any]], list[str]]:
         """Build a registration payload, and name whatever is still missing."""
         problems: list[str] = []
-        parsed = parse_national_id(str(fields.get("national_id", "")))
-        # A missing letter is filled in from the digits; the read-back before
-        # submitting is where the caller confirms it.
-        if not parsed["valid"] and not parsed["letter_missing"]:
+        national_id, phone_raw = split_id_and_phone(
+            str(fields.get("national_id") or ""),
+            str(fields.get("phone") or ""),
+        )
+        parsed = parse_national_id(national_id)
+        if not parsed["valid"] and not parsed.get("letter_missing"):
             expected = parsed["expected_letter"]
             problems.append(
                 f"national id does not check out; expected letter {expected}"
                 if expected else "national id is not a readable DNI or NIE"
             )
 
-        email = normalize_email(str(fields.get("email", "")))
+        email, glued_insurer = peel_insurer_from_email(normalize_email(str(fields.get("email", ""))))
         if "@" not in email or "." not in email.split("@")[-1]:
             problems.append("email is not a full address")
 
-        phone = normalize_phone(str(fields.get("phone", "")))
+        phone = normalize_phone(phone_raw)
         if len(phone) != 9:
             problems.append("phone is not nine digits")
 
-        insurer = self.resolve_insurer(fields.get("insurer"))
+        insurer = self.resolve_insurer(fields.get("insurer") or glued_insurer)
         if insurer is None:
             problems.append(f"insurer {fields.get('insurer')!r} is not one of the clinic's plans")
 
@@ -670,16 +694,23 @@ class SchedulingEngine:
 def _choose_policy(
     slot: Slot, own_insurer: Optional[str], named: Optional[Sequence[str]]
 ) -> Optional[str]:
-    """The plan the appointment is billed against, never a guess."""
-    payable = set(slot.payable_with)
+    """The plan the appointment is billed against, never a guess.
+
+    A slot payable with several plans is not a licence to pick one the caller
+    never held: that is how the second-policy control case is failed.
+    """
+    payable = [plan for plan in slot.payable_with if plan]
     if not payable:
         return None
-    if own_insurer and own_insurer in payable:
+    payable_set = set(payable)
+    if own_insurer and own_insurer in payable_set:
         return own_insurer
     for insurer in named or ():
-        if insurer in payable:
+        if insurer in payable_set:
             return insurer
-    return sorted(payable)[0]
+    # One plan on the slot is the API's decision, not ours.
+    unique = list(dict.fromkeys(payable))
+    return unique[0] if len(unique) == 1 else None
 
 
 def _unique(slots: list[Slot]) -> list[Slot]:
