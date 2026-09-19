@@ -3,7 +3,7 @@
 ## Desde cero en una máquina nueva
 
 Python 3.11 o más nuevo. Nosotros corremos 3.14 y no hace falta igualarlo: en la
-ruta configurada (ElevenLabs para escuchar y para hablar) el audio viaja en µ-law
+ruta configurada (Deepgram para escuchar, ElevenLabs para hablar) el audio viaja en µ-law
 de punta a punta y no pasa por `audioop`, que es lo único que cambió en 3.13.
 
 ```powershell
@@ -107,16 +107,18 @@ Sin token responde 401. `/ws` y `/health` no lo necesitan (la plataforma solo us
 `/ws`), y en `http://localhost:7860/` desde la propia máquina tampoco. No
 compartas la URL con el token fuera del equipo.
 
-## Voz: ElevenLabs en el cable, Aura de reserva
+## Voz: Deepgram en la escucha, ElevenLabs en la voz
 
-STT y TTS van por ElevenLabs (`STT_PROVIDER=elevenlabs`, `TTS_PROVIDER=elevenlabs`):
-Scribe v2 realtime en la escucha, Flash (y v3 conversacional en catalán) en la
-voz. Aura sigue en el código como reserva si Flash responde 429, y se puede
-volver a ella para practicar sin gastar el plan Creator:
+STT es Nova-3 (`STT_PROVIDER=deepgram`): más rápido en el cable, `numerals` para
+DNI y teléfono, y Catalán con el cierre `language=ca` cuando el léxico lo
+detecta. TTS sigue en ElevenLabs (`TTS_PROVIDER=elevenlabs`): Flash en
+español/inglés, v3 conversacional en catalán. Aura es la reserva si Flash
+responde 429.
+
+Scribe queda como interruptor:
 
 ```
-STT_PROVIDER=deepgram
-TTS_PROVIDER=deepgram
+STT_PROVIDER=elevenlabs
 ```
 
 El plan Creator de ElevenLabs tiene **131.000 caracteres de TTS**. Un scored

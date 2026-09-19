@@ -82,7 +82,7 @@ class Settings:
     console_token: str = field(default_factory=lambda: _env("CONSOLE_TOKEN"))
 
     # Speech to text
-    stt_provider: str = field(default_factory=lambda: _env("STT_PROVIDER", default="elevenlabs").lower())
+    stt_provider: str = field(default_factory=lambda: _env("STT_PROVIDER", default="deepgram").lower())
     deepgram_api_key: str = field(default_factory=lambda: _env("DEEPGRAM_API_KEY"))
     deepgram_model: str = field(default_factory=lambda: _env("DEEPGRAM_MODEL", default="nova-3"))
     deepgram_language: str = field(default_factory=lambda: _env("DEEPGRAM_LANGUAGE", default="multi"))
