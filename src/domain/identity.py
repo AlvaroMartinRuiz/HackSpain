@@ -79,29 +79,103 @@ def parse_national_id(raw: str) -> dict[str, object]:
     """Read a DNI or NIE as dictated and re-derive its own check letter.
 
     The letter is what separates a misheard digit from an invented one, so the
-    expected letter is always returned alongside whatever was heard.
+    expected letter is always returned alongside whatever was heard. A letter
+    that was simply never said is not the same as a wrong letter: the digits
+    still determine it, and `letter_missing` says so.
     """
     cleaned = re.sub(r"[^0-9A-Za-z]", "", raw or "").upper()
     result: dict[str, object] = {"input": raw, "cleaned": cleaned, "kind": None,
-                                 "valid": False, "value": None, "expected_letter": None}
+                                 "valid": False, "value": None, "expected_letter": None,
+                                 "letter_missing": False}
     if not cleaned:
         return result
 
     if cleaned[0] in NIE_PREFIX:
         body, letter = cleaned[:8], cleaned[8:9]
         if len(body) == 8 and body[1:].isdigit():
+            # A digit after the body is a glued phone, not a check letter.
+            if letter.isdigit():
+                return result
             expected = nie_check_letter(body)
             result.update(kind="NIE", expected_letter=expected, value=body + expected,
-                          valid=letter == expected)
+                          valid=letter == expected, letter_missing=not letter)
         return result
 
     digits = cleaned[:8]
     letter = cleaned[8:9]
     if len(digits) == 8 and digits.isdigit():
+        if letter.isdigit():
+            return result
         expected = dni_check_letter(digits)
         result.update(kind="DNI", expected_letter=expected, value=digits + expected,
-                      valid=letter == expected)
+                      valid=letter == expected, letter_missing=not letter)
     return result
+
+
+def split_id_and_phone(national_id: str, phone: str) -> tuple[str, str]:
+    """Unstick a DNI/NIE and a mobile that STT concatenated into one string."""
+    id_raw = (national_id or "").strip()
+    phone_raw = (phone or "").strip()
+    id_digits = re.sub(r"\D", "", id_raw)
+    phone_digits = re.sub(r"\D", "", phone_raw)
+
+    phone_is_separate = (
+        len(normalize_phone(phone_raw)) == 9 and phone_digits != id_digits and len(id_digits) <= 9
+    )
+    if phone_is_separate:
+        return id_raw, phone_raw
+
+    blob = phone_raw if len(phone_digits) > len(id_digits) else id_raw
+    cleaned = re.sub(r"[^0-9A-Za-z]", "", blob).upper()
+
+    if cleaned[:1] in NIE_PREFIX and len(cleaned) >= 8 and cleaned[1:8].isdigit():
+        nie = cleaned[:8]
+        rest = cleaned[8:]
+        if rest[:1].isalpha():
+            nie += rest[:1]
+            rest = rest[1:]
+        rest_digits = re.sub(r"\D", "", rest)
+        if len(rest_digits) >= 9:
+            return nie, rest_digits[-9:]
+
+    digits = re.sub(r"\D", "", cleaned)
+    if len(digits) >= 16:
+        mobile, body = digits[-9:], digits[:-9]
+        if len(body) == 8:
+            return body, mobile
+        if len(body) == 7:
+            # Prefix and letter dropped; X is the usual NIE prefix.
+            return "X" + body, mobile
+        if len(body) == 9 and body[0] in NIE_PREFIX:
+            return body, mobile
+    return id_raw, phone_raw
+
+
+# STT often glues the insurer onto the domain: "outlook.escinitas", "gmail.comsinitas".
+_EMAIL_INSURER_TAIL = re.compile(
+    r"(?P<tld>com|es|net|org)\.?(?P<ins>sinitas|zinitas|cinitas|sanitas|adeslas|"
+    r"asisa|dkv|axa|aegon|mapfre|privado|nuevamutua|nueva_?mutua)$",
+    re.I,
+)
+_INSURER_FROM_STT = {
+    "sinitas": "sanitas", "zinitas": "sanitas", "cinitas": "sanitas",
+    "sanitas": "sanitas", "adeslas": "adeslas", "asisa": "asisa",
+    "dkv": "dkv", "axa": "axa", "aegon": "aegon", "mapfre": "mapfre",
+    "privado": "privado", "nuevamutua": "nueva_mutua", "nueva_mutua": "nueva_mutua",
+}
+
+
+def peel_insurer_from_email(email: str) -> tuple[str, str | None]:
+    """Split an insurer name that STT appended to the domain, if one is there."""
+    local, sep, domain = email.partition("@")
+    if not sep:
+        return email, None
+    match = _EMAIL_INSURER_TAIL.search(domain)
+    if not match:
+        return email, None
+    cleaned = f"{local}@{domain[:match.start()]}{match.group('tld').lower()}"
+    spoken = _INSURER_FROM_STT.get(match.group("ins").lower())
+    return cleaned, spoken
 
 
 def normalize_email(raw: str) -> str:

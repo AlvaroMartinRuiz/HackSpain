@@ -279,6 +279,15 @@ class CallSession:
         """Silence is always wrong, so something is always reported."""
         if any(result.accepted or result.duplicate for result in self.submissions):
             return
+        leftover = self.agent.tools.completable_registration()
+        if leftover:
+            await self.record("decision", {
+                "stage": "safety_net",
+                "why": "the call ended with a complete registration still unsubmitted",
+            })
+            await self.submit("register", {"call_id": self.call_id, **leftover})
+            if any(result.accepted or result.duplicate for result in self.submissions):
+                return
         reason = self.agent.tools.fallback_reason()
         await self.record("decision", {
             "stage": "safety_net",

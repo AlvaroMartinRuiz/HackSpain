@@ -100,9 +100,11 @@ SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Real availability for one patient. Returns numbered options you can read out, "
                 "or the rule that forbids it. Say the time phrase exactly as the caller said it "
-                "in `when` — it is resolved against the clock in Madrid. Never booked for the "
-                "same day. Name the patient: slots carry their appointment type and their plan, "
-                "so searching under the wrong person returns the wrong answer."
+                "in `when` — it is resolved against the clock in Madrid. If they later name a "
+                "day or say 'first thing' / 'a primera hora', call again with that phrase; do "
+                "not book a slot from a previous 'soonest' list. Never booked for the same day. "
+                "Name the patient: slots carry their appointment type and their plan, so "
+                "searching under the wrong person returns the wrong answer."
             ),
             "parameters": {
                 "type": "object",
@@ -241,9 +243,10 @@ SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "register_new_patient",
             "description": (
-                "Put a caller the directory does not know on file. Every field is checked: the "
-                "national id's own letter is re-derived from its digits, so read it back before "
-                "calling this. Nothing is booked."
+                "Put a caller the directory does not know on file. Call as soon as every field "
+                "has been heard, including a missing DNI/NIE letter — it is re-derived from the "
+                "digits. If STT glued the id and the phone into one number, pass both as heard. "
+                "Nothing is booked."
             ),
             "parameters": {
                 "type": "object",
@@ -328,6 +331,8 @@ class ToolBox:
         # spoken surname itself and skip the ambiguity find_doctor exists to
         # surface.
         self.resolved_providers: set[str] = set()
+        self.registration_attempted = False
+        self.last_register_fields: Optional[dict[str, Any]] = None
 
     def schemas(self) -> list[dict[str, Any]]:
         return SCHEMAS
@@ -605,6 +610,8 @@ class ToolBox:
                 + ("" if search.part_of_day_possible else
                    "This specialty has no appointments at that time of day at all — tell them "
                    "that plainly instead of implying there might be. ")
+                + ("These are the first appointments that morning — offer the earliest. "
+                   if search.when and search.when.first_thing else "")
                 + ("Mention what `notes` says before offering these. " if search.notes else "")
                 + "Then call book_slot with the option number they choose."
             ),
@@ -709,11 +716,18 @@ class ToolBox:
                             "a caller cancelling two appointments says so here."}
 
     async def _tool_register_new_patient(self, args: dict[str, Any]) -> dict[str, Any]:
+        self.registration_attempted = True
+        self.last_register_fields = dict(args)
+        # A failed directory lookup is expected on a register call; it is not the outcome.
+        if self.last_reason == "patient_not_found":
+            self.last_reason = None
         fields, problems = self.engine.plan_registration(args)
         if fields is None:
             return {"registered": False, "problems": problems,
-                    "guidance": "Ask the caller to confirm exactly these details, then call again. "
-                                "For the id, read the digits back and confirm the final letter."}
+                    "guidance": "Ask only for the fields in `problems`, then call again. "
+                                "A missing check letter is filled in from the digits — do not "
+                                "hold the call to hear it. If the id and phone arrived as one "
+                                "number, pass them as heard."}
 
         payload = {"call_id": self.session.call_id, **fields}
         result = await self.session.submit("register", payload)
@@ -831,10 +845,18 @@ class ToolBox:
             return self.last_reason
         return "out_of_scope"
 
+    def completable_registration(self) -> Optional[dict[str, Any]]:
+        """A registration payload that was heard but never accepted, if one exists."""
+        if not self.last_register_fields:
+            return None
+        fields, problems = self.engine.plan_registration(self.last_register_fields)
+        return fields if fields and not problems else None
+
     def fallback_reason(self) -> str:
         """The reason to report if the call ends before the model closes it."""
         if self.last_reason and is_valid_reason(self.last_reason):
-            return self.last_reason
-        if self.patient is None:
+            if not (self.registration_attempted and self.last_reason == "patient_not_found"):
+                return self.last_reason
+        if self.patient is None and not self.registration_attempted:
             return "patient_not_found"
         return "no_availability"
