@@ -115,8 +115,6 @@ class CallSession:
 
     async def start(self) -> None:
         if not self.text_mode:
-            assert self.transcriber is not None
-            await self.transcriber.start()
             self._tasks = [
                 asyncio.create_task(self._speaker_loop(), name=f"speaker:{self.call_id}"),
                 asyncio.create_task(self._player_loop(), name=f"player:{self.call_id}"),
@@ -126,6 +124,12 @@ class CallSession:
         # Do not await the greeting here: the socket still has to read inbound
         # audio while the first sentence is synthesised.
         self._tasks.append(asyncio.create_task(self._greet(), name=f"greet:{self.call_id}"))
+        if not self.text_mode:
+            # The greeting needs no ears, so it plays while the transcriber
+            # connects instead of after. Inbound frames wait in the socket until
+            # this returns, so nothing the caller says is lost.
+            assert self.transcriber is not None
+            await self.transcriber.start()
 
     async def _greet(self) -> None:
         try:
