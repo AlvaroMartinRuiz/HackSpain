@@ -138,6 +138,9 @@ interrupciones (p13), idiomas (p11). Y con Aura u OpenAI, no ElevenLabs.
 # El cable aguanta la ráfaga más grande del set (problema 2)
 .\.venv\Scripts\python scripts\mock_call.py --calls 10 --seconds 6
 
+# Los arreglos de voz, consola y herramientas (sin modelo ni minutos de voz)
+.\.venv\Scripts\python scripts\check_fixes.py
+
 # La lógica sigue dando el registro correcto
 .\.venv\Scripts\python scripts\rehearse.py
 ```

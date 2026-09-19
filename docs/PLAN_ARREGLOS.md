@@ -27,6 +27,25 @@ Revisado sobre `main` @ `a7cb250` y sobre las 20 llamadas reales de la consola d
 - Primer audio medido con precisión: **0,75–1,0 s con esta rama frente a 1,3–1,5 s en `main`** (por el saludo cacheado).
 - `rehearse.py`, los 17 escenarios con el LLM real: todos han pasado en alguna ejecución. `questions` a veces falla una comprobación porque el agente contesta el horario (bien) sin llamar a `clinic_facts`; la reserva sale correcta, que es lo que puntúa. `triage` y `real_call` fallaron una vez de cada 3–4 por variabilidad del modelo.
 
+### Revisión del equipo: qué se ha hecho con cada punto
+
+| Punto | Veredicto | Qué se ha hecho |
+|---|---|---|
+| `compare_digest` da 500 con longitudes distintas | ❌ No ocurre | Compara **bytes**: longitudes distintas devuelven `False` y 401. Solo lanza error con `str` no ASCII, que no usamos. Queda cubierto en `check_fixes.py` |
+| Un DNI sin letra puede abrir otra ficha | ✅ Arreglado | Solo, ya no busca y pide un segundo campo; con nombre o fecha, el filtro exacto del directorio descarta a la persona equivocada |
+| `caller_has_no_other_plan` es solo la palabra del modelo | ✅ Arreglado | Además hace falta que el agente **lo haya preguntado de verdad** (se comprueba en lo que dijo, en en/es/ca) |
+| Catalán por falso positivo → "no hay hueco" | ⏳ En el plan del catalán (abajo) | Hoy no pasa (Deepgram nunca da `ca`) |
+| Las pruebas no están en la rama | ✅ Arreglado | `scripts/check_fixes.py` (sin modelo ni minutos de voz) |
+| El email se relee con "dot/at" | ✅ Arreglado | En el idioma de la llamada (punto/arroba, punt/arrova) |
+| ElevenLabs no manda `language_code` en catalán | ✅ Arreglado | Manda `ca` (v3 conversational lo acepta; probado) |
+| Merge con `main` / nombres | ✅ Hecho | `dc23a52` traído; `chart_briefing` ya no afirma una identidad sin confirmar; ejemplos también en inglés |
+
+**Encontrado al ensayar después:**
+- El agente leyó en voz alta *"¿Hablo con [su nombre completo]?"*: era el marcador de la descripción de `lookup_patient`. Quitado.
+- Pedía un tercer dato después de nombre + fecha (5 veces por ronda de ensayos): la herramienta decía siempre *"confirm one more field"*. Ahora, con 2 campos coincidentes, no lo pide (0 veces).
+- Decía el horario de memoria, **sin tenerlo en el contexto** (acertó por suerte). Ahora el prompt lleva los horarios reales del catálogo.
+- El saludo esperaba a que conectase Deepgram: ahora suena mientras conecta. **Primer audio ~0,45 s** (antes 0,75–1,0 s; en `main` 1,3–1,5 s).
+
 **Cada miembro del equipo debe añadir a su `.env`:** `CONSOLE_TOKEN` (nuevo, para abrir la consola por ngrok) y cambiar `AGENT_GREETING` al saludo bilingüe (o borrar la línea).
 
 ## Resumen
@@ -259,3 +278,39 @@ Después de cada punto: `check_domain.py`, `check_engine.py` y `rehearse.py` en 
 
 - **Idioma del saludo.** 69 de los 73 casos públicos son en inglés y los llamantes siguen en inglés. Opción: *"Clínica Arenal, good morning — buenos días. How can I help?"*
 - **Cloudflare.** La URL actual del LLM funciona (probada con streaming y tools); no cambiarla. Solo confirmar en Cloudflare → AI Gateway → Logs que las peticiones pasan por el gateway.
+
+---
+
+## Plan: detectar el catalán (p11, peso 3)
+
+**Hoy B3 no se activa nunca.** Deepgram en `multi` no reconoce el catalán: lo transcribe deformado (*"buen día… balmecha de capsulera"*) y nunca devuelve `ca`. Así que ni el filtro de médicos que hablan catalán ni la voz catalana llegan a usarse, y los casos privados del p11 son sobre todo en catalán.
+
+### Qué se ha medido (con una frase catalana y otra española sintetizadas)
+
+| Opción | Detecta el catalán | Transcribe el catalán | Coste |
+|---|---|---|---|
+| Deepgram `multi` (lo actual) | ❌ | ❌ deformado | — |
+| Deepgram, detección no streaming | ❌ dice **hindi** (96 %); limitado a en/es/ca dice **es** (16 %) | — | — |
+| Deepgram streaming `language=ca` | — (hay que saber el idioma antes) | ✅ perfecto | — |
+| **ElevenLabs Scribe** | ✅ `cat` 96 % · `spa` 89 % | ✅ perfecto | **0 caracteres** de los 131K (medido) |
+
+### Propuesta (por orden)
+
+1. **`ScribeTranscriber` como transcriptor principal** (`STT_PROVIDER=scribe`, con Deepgram como respaldo), en `wss://api.elevenlabs.io/v1/speech-to-text/realtime`:
+   - `audio_format=ulaw_8000`: los frames del cable se reenvían tal cual.
+   - `commit_strategy=vad`; los `partial_transcript` alimentan `on_partial`, y **el primer parcial de cada frase hace de `on_speech_started`** (Scribe no tiene ese evento, y la interrupción depende de él).
+   - `committed_transcript_with_timestamps` trae `language_code` (`cat`/`spa`/`eng`) → `_two_letter` ya lo traduce.
+   - Misma interfaz que `DeepgramTranscriber`; nada más cambia.
+   - *~2 h con pruebas.*
+2. **No fiarse de una sola detección** (el punto 4 de la revisión):
+   - Pasar a `ca` solo con probabilidad ≥ 0,8 **y** dos frases seguidas en catalán, o una si el llamante pide expresamente hablar en catalán.
+   - Si el idioma viene del STT (no del modelo) y el filtro de catalán deja la búsqueda **vacía**, repetir sin filtro y decírselo al llamante en vez de dar "no hay hueco". Si el modelo pasó `language=ca` porque el llamante lo pidió, el filtro es duro (es lo que puntúa el p11).
+   - *~45 min.*
+3. **Plan B si Scribe en tiempo real falla alguna prueba** (latencia, interrupciones): mantener Deepgram `multi` para los turnos y, en paralelo, mandar el audio de cada frase terminada a Scribe **no streaming** solo para detectar el idioma. Si es `cat`, reabrir Deepgram con `language=ca` (transcribe perfecto, medido). Más complejo, pero conserva lo que ya funciona.
+
+### Cómo comprobarlo antes de adoptarlo
+
+- [ ] Práctica del **caso público del p11 en catalán**: (a) llega `ca`, (b) el agente responde en catalán, (c) la voz suena catalana, **(d) el médico reservado es uno de los 4 que hablan catalán** (lo único que puntúa).
+- [ ] Práctica en **español**: **no** debe pasar a `ca` (falso positivo).
+- [ ] p1 y p13 con Scribe: misma latencia e **interrupciones que siguen funcionando**.
+- [ ] Contador de ElevenLabs antes y después de una llamada en tiempo real (en no streaming consume 0; confirmar que en tiempo real también).
