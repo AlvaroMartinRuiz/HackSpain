@@ -3,33 +3,51 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>El Turno · call &amp; agent control</title>
-<link rel="stylesheet" href="/static/ops.css" />
+<title>Socket Wizard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/static/ops.css?v=pages3" />
 </head>
-<body>
+<body data-page="live">
 
 <header class="top">
-  <div class="brand">
+  <a class="brand" href="#/" data-nav="live">
     <span class="mark" id="brand-mark" data-icon="mark-elturno"></span>
     <div>
-      <h1>El Turno · control</h1>
+      <h1>Socket Wizard</h1>
       <span class="sub" id="clinic-name">Clínica Arenal</span>
     </div>
-    <span class="dot" id="link-dot" title="connection to the server"></span>
-  </div>
-  <div class="pills" id="pills"></div>
-  <nav class="actions">
-    <button class="btn" id="btn-rehearse">
-      <span class="h-icon" data-icon="icon-rehearse"></span> Rehearse
-    </button>
-    <a class="btn ghost" href="/console">Classic console</a>
+  </a>
+
+  <nav class="nav" aria-label="Main">
+    <a href="#/" data-nav="live">Live <span class="nav-count" id="nav-live-count">0</span></a>
+    <a href="#/calls" data-nav="calls">Calls</a>
+    <a href="#/rehearse" data-nav="rehearse">Rehearse</a>
   </nav>
+
+  <div class="header-end">
+    <span class="link-state" title="connection to the server">
+      <span class="dot" id="link-dot"></span>
+      <span id="link-label">Offline</span>
+    </span>
+    <a class="btn ghost" href="/console">Classic console</a>
+  </div>
 </header>
 
-<section class="kpis" id="kpis"></section>
+<section class="view" id="view-live">
+  <div class="page">
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Floor</p>
+        <h2>On the line</h2>
+        <p class="lede" id="live-lede">The endpoint is listening.</p>
+      </div>
+    </div>
+    <div class="pills" id="pills"></div>
 
-<main>
-  <div class="left" id="left-col">
+    <section class="kpis" id="kpis"></section>
+
     <section class="panel agents">
       <h2>
         <span class="h-icon" data-icon="metric-live"></span>
@@ -45,21 +63,37 @@
       <div class="agent-grid" id="agent-grid"></div>
     </section>
 
-    <div class="splitter h" id="split-fleet" role="separator" aria-orientation="horizontal"
-         tabindex="0" aria-label="Resize the agents panel"
-         title="Drag to resize · double-click to reset"></div>
+    <section class="panel recent">
+      <h2>
+        <span class="h-icon" data-icon="icon-transcript"></span>
+        Recent calls
+        <a class="panel-link" href="#/calls" data-nav="calls">View all</a>
+      </h2>
+      <div class="recent-list" id="recent-list"></div>
+    </section>
+  </div>
+</section>
+
+<section class="view hidden" id="view-calls" hidden>
+  <div class="page wide">
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">History</p>
+        <h2>Calls</h2>
+        <p class="lede">Every session the endpoint has seen, live ones first.</p>
+      </div>
+      <div class="seg" id="call-filter">
+        <button type="button" class="on" data-scope="all">All</button>
+        <button type="button" data-scope="submitted">With record</button>
+        <button type="button" data-scope="silent">No record</button>
+        <button type="button" data-scope="errors">With errors</button>
+      </div>
+    </div>
 
     <section class="panel calls">
       <h2>
         <span class="h-icon" data-icon="icon-transcript"></span>
-        Calls
         <span class="count" id="call-count">0</span>
-        <span class="seg" id="call-filter">
-          <button class="on" data-scope="all">All</button>
-          <button data-scope="submitted">With record</button>
-          <button data-scope="silent">No record</button>
-          <button data-scope="errors">With errors</button>
-        </span>
       </h2>
       <div class="table-wrap">
         <table class="calls-table">
@@ -80,64 +114,80 @@
       </div>
     </section>
   </div>
+</section>
 
-  <div class="splitter v" id="split-detail" role="separator" aria-orientation="vertical"
-       tabindex="0" aria-label="Resize the detail panel"
-       title="Drag to resize · double-click to reset"></div>
+<section class="view hidden" id="view-call" hidden>
+  <div class="call-page">
+    <aside class="call-rail">
+      <a class="back" id="btn-back" href="#/">← Back</a>
+      <div class="call-head" id="call-head">
+        <div class="call-head-empty">Select a call to inspect it</div>
+      </div>
+      <!-- Outside the head on purpose: the head is rebuilt on every event, and
+           rebuilding an <audio> element stops whatever was playing. -->
+      <div id="tape"></div>
+    </aside>
+    <section class="call-transcript">
+      <div class="transcript-head">
+        <span class="h-icon" data-icon="icon-transcript"></span> Transcript
+      </div>
+      <div class="transcript" id="transcript"></div>
+      <div class="partial" id="partial"></div>
+    </section>
+    <aside class="inspector">
+      <div class="tabs">
+        <button type="button" class="tab active" data-tab="decisions">Decisions</button>
+        <button type="button" class="tab" data-tab="tools">
+          <span class="h-icon" data-icon="icon-tool"></span> Tools
+        </button>
+        <button type="button" class="tab" data-tab="record">Record</button>
+      </div>
+      <div class="tab-body" id="tab-decisions"></div>
+      <div class="tab-body hidden" id="tab-tools"></div>
+      <div class="tab-body hidden" id="tab-record"></div>
+    </aside>
+  </div>
+</section>
 
-  <section class="panel detail" id="detail-pane">
-    <div class="call-head" id="call-head">
-      <div class="call-head-empty">Select an agent or a call to inspect it</div>
+<section class="view hidden" id="view-rehearse" hidden>
+  <div class="page narrow">
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Sandbox</p>
+        <h2>Rehearse a call</h2>
+        <p class="lede">
+          Same brain, same tools, same clinic — as text, with no audio and no quota.
+          One patient turn per line.
+        </p>
+      </div>
     </div>
-    <!-- Outside the head on purpose: the head is rebuilt on every event, and
-         rebuilding an <audio> element stops whatever was playing. -->
-    <div id="tape"></div>
-    <div class="transcript" id="transcript"></div>
-    <div class="partial" id="partial"></div>
-    <div class="tabs">
-      <button class="tab active" data-tab="decisions">Decisions</button>
-      <button class="tab" data-tab="tools">
-        <span class="h-icon" data-icon="icon-tool"></span> Tools
-      </button>
-      <button class="tab" data-tab="record">Record</button>
-    </div>
-    <div class="tab-body" id="tab-decisions"></div>
-    <div class="tab-body hidden" id="tab-tools"></div>
-    <div class="tab-body hidden" id="tab-record"></div>
-  </section>
-</main>
 
-<div class="modal hidden" id="rehearse-modal">
-  <div class="sheet">
-    <h3><span class="h-icon" data-icon="icon-rehearse"></span> Rehearse a call</h3>
-    <p class="hint">
-      Same brain, same tools, same clinic — as text, with no audio and no quota.
-      One patient turn per line.
-    </p>
-
-    <label for="rehearse-turns">What the patient says</label>
-    <textarea id="rehearse-turns" spellcheck="false">Good morning, I would like an appointment with Dr Sáez.
+    <form class="sheet" id="rehearse-form">
+      <span class="h-icon form-mark" data-icon="icon-rehearse"></span>
+      <label for="rehearse-turns">What the patient says</label>
+      <textarea id="rehearse-turns" spellcheck="false">Good morning, I would like an appointment with Dr Sáez.
 My name is Marta Ruiz, my ID is 12345678Z.
 Next Thursday first thing, if possible.</textarea>
 
-    <label for="rehearse-number">Caller number (empty = withheld)</label>
-    <input type="text" id="rehearse-number" placeholder="+34600111222" spellcheck="false" />
+      <label for="rehearse-number">Caller number (empty = withheld)</label>
+      <input type="text" id="rehearse-number" placeholder="+34600111222" spellcheck="false" />
 
-    <div class="row">
-      <label>
-        <input type="checkbox" id="rehearse-dry" checked />
-        Dry run — keep the record local
-      </label>
-    </div>
+      <div class="row">
+        <label>
+          <input type="checkbox" id="rehearse-dry" checked />
+          Dry run — keep the record local
+        </label>
+      </div>
 
-    <div class="foot">
-      <span class="status" id="rehearse-status"></span>
-      <button class="btn ghost" id="rehearse-cancel">Close</button>
-      <button class="btn" id="rehearse-run">Rehearse</button>
-    </div>
+      <div class="foot">
+        <span class="status" id="rehearse-status"></span>
+        <a class="btn ghost" href="#/" data-nav="live">Cancel</a>
+        <button type="submit" class="btn" id="rehearse-run">Rehearse</button>
+      </div>
+    </form>
   </div>
-</div>
+</section>
 
-<script src="/static/ops.js"></script>
+<script src="/static/ops.js?v=pages3"></script>
 </body>
 </html>

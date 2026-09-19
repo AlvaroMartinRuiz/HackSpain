@@ -17,7 +17,7 @@ import httpx
 from src.config import settings
 from src.voice.audio import pcm16_to_ulaw, resample_pcm16, silence
 
-log = logging.getLogger("elturno")
+log = logging.getLogger("socketwizard")
 
 # ElevenLabs Creator allows 10 concurrent Flash requests.
 _TTS_GATE = asyncio.Semaphore(10)

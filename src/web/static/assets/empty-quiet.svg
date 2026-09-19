@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="10.400 20.732 139.200 78.456" preserveAspectRatio="xMidYMid meet">
 <!-- SVG created with Arrow, by QuiverAI (https://quiver.ai) -->
-  <rect x="20" y="27.27" width="120" height="65.38" fill="currentColor"></rect>
+  <rect x="20" y="27.27" fill="currentColor"></rect>
   <path d="m28.07 56.22v29.51c0 0.8727 0.6818 1.5 1.5 1.5h100.9c0.8591 0 1.5-0.6682 1.5-1.5v-29.51" stroke="currentColor" stroke-width=".4163"></path>
   <rect x="25.42" y="52.16" width="109.2" height="4.062" rx="1.464" stroke="currentColor" stroke-width=".4163"></rect>
   <path d="m28.07 59.92h103.9" stroke="currentColor" stroke-width=".4163"></path>

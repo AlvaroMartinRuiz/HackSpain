@@ -17,7 +17,7 @@
   
   <circle cx="12.03" cy="13.84" r="7.918" stroke="currentColor" stroke-width=".77"></circle>
   <path d="m12.02 3.834v1.968" stroke="currentColor" stroke-width=".77"></path>
-  <rect x="9.847" y="2.248" width="4.359" height="1.488" rx=".7438" stroke="currentColor" stroke-width=".77"></rect>
+  <rect x="9.847" y="2.248" rx=".7438" stroke="currentColor" stroke-width=".77"></rect>
   <path d="m7.422 5.172 1.08 1.5" stroke="currentColor" stroke-width=".77"></path>
   <path d="m7.548 4.638-0.96 0.786" stroke="currentColor" stroke-linecap="round" stroke-width="1.041"></path>
   <path d="m16.56 5.172-1.074 1.5" stroke="currentColor" stroke-width=".77"></path>
