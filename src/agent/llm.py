@@ -22,6 +22,7 @@ class ToolCall:
     id: str
     name: str
     arguments: str = ""
+    extra_content: Optional[dict[str, Any]] = None
 
     def parsed_arguments(self) -> dict[str, Any]:
         try:
@@ -29,6 +30,17 @@ class ToolCall:
         except ValueError:
             return {}
         return value if isinstance(value, dict) else {}
+
+    def as_message_call(self) -> dict[str, Any]:
+        """Replay the call, including Gemini 3 thought signatures."""
+        payload: dict[str, Any] = {
+            "id": self.id,
+            "type": "function",
+            "function": {"name": self.name, "arguments": self.arguments or "{}"},
+        }
+        if self.extra_content:
+            payload["extra_content"] = self.extra_content
+        return payload
 
 
 @dataclass
@@ -95,7 +107,11 @@ class LLMClient:
             "messages": messages,
             "stream": True,
         }
-        if settings.llm_reasoning_effort:
+        # Gemini 3.8 ignores temperature and 400s if it is sent. Thinking cannot
+        # be turned off; "low" is the fast setting for a live phone call.
+        if _uses_gemini3_thinking(settings.llm_model):
+            body["reasoning_effort"] = settings.llm_reasoning_effort or "low"
+        elif settings.llm_reasoning_effort:
             body["reasoning_effort"] = settings.llm_reasoning_effort
         else:
             body["temperature"] = settings.llm_temperature if temperature is None else temperature
@@ -186,6 +202,14 @@ class LLMClient:
                                         entry.name = function["name"]
                                     if function.get("arguments"):
                                         entry.arguments += function["arguments"]
+                                    extra = call.get("extra_content") or function.get("extra_content")
+                                    entry.extra_content = _merge_extra(entry.extra_content, extra)
+                                if partial:
+                                    first = partial[min(partial)]
+                                    if not _has_thought_signature(first.extra_content):
+                                        first.extra_content = _merge_extra(
+                                            first.extra_content, delta.get("extra_content")
+                                        )
                 except LLMError:
                     raise
                 except httpx.HTTPError as exc:
@@ -204,3 +228,33 @@ class LLMClient:
                 return
 
         raise last_error or LLMError("llm failed")
+
+
+def _uses_gemini3_thinking(model: str) -> bool:
+    return "gemini-3" in (model or "").lower()
+
+
+def _has_thought_signature(extra: Optional[dict[str, Any]]) -> bool:
+    if not extra:
+        return False
+    for namespace in extra.values():
+        if isinstance(namespace, dict) and namespace.get("thought_signature"):
+            return True
+    return False
+
+
+def _merge_extra(existing: Optional[dict[str, Any]], incoming: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(incoming, dict) or not incoming:
+        return existing
+    if not existing:
+        return incoming
+    merged = dict(existing)
+    for key, value in incoming.items():
+        current = merged.get(key)
+        if isinstance(value, dict) and isinstance(current, dict):
+            inner = dict(current)
+            inner.update(value)
+            merged[key] = inner
+        else:
+            merged[key] = value
+    return merged

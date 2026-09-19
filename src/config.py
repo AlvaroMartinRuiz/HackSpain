@@ -86,8 +86,8 @@ class Settings:
     deepgram_api_key: str = field(default_factory=lambda: _env("DEEPGRAM_API_KEY"))
     deepgram_model: str = field(default_factory=lambda: _env("DEEPGRAM_MODEL", default="nova-3"))
     deepgram_language: str = field(default_factory=lambda: _env("DEEPGRAM_LANGUAGE", default="multi"))
-    stt_endpointing_ms: int = field(default_factory=lambda: _int("STT_ENDPOINTING_MS", 500))
-    stt_utterance_end_ms: int = field(default_factory=lambda: _int("STT_UTTERANCE_END_MS", 1000))
+    stt_endpointing_ms: int = field(default_factory=lambda: _int("STT_ENDPOINTING_MS", 800))
+    stt_utterance_end_ms: int = field(default_factory=lambda: _int("STT_UTTERANCE_END_MS", 1200))
     stt_min_confidence: float = field(
         default_factory=lambda: _float("STT_MIN_CONFIDENCE", 0.45)
     )

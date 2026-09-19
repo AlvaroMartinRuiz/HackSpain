@@ -84,14 +84,7 @@ class Agent:
             self.messages.append({
                 "role": "assistant",
                 "content": completion.text or None,
-                "tool_calls": [
-                    {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {"name": call.name, "arguments": call.arguments or "{}"},
-                    }
-                    for call in completion.tool_calls
-                ],
+                "tool_calls": [call.as_message_call() for call in completion.tool_calls],
             })
 
             for call in completion.tool_calls:
