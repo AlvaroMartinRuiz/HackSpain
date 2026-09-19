@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable, Optional, Sequence
 
 import httpx
 
-from src.config import settings
+from v2.config import Config
 
 EventHook = Callable[[str, dict[str, Any]], Awaitable[None]]
 
@@ -86,7 +86,8 @@ class SubmitResult:
 
 
 class PlatformClient:
-    def __init__(self, on_event: Optional[EventHook] = None) -> None:
+    def __init__(self, on_event: Optional[EventHook] = None, config: Optional[Config] = None) -> None:
+        settings = config or Config()
         self._base = settings.api_base_url
         self._on_event = on_event
         limits = httpx.Limits(max_connections=100, max_keepalive_connections=40)

@@ -3,7 +3,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 libgomp1
 COPY v2/requirements.txt /app/v2/requirements.txt
 RUN python -m pip install --no-cache-dir -r /app/v2/requirements.txt
-COPY src /app/src
 COPY data/catalog.json /app/data/catalog.json
 COPY v2 /app/v2
 RUN mkdir -p /app/v2/.data && chown -R 10001:10001 /app/v2/.data

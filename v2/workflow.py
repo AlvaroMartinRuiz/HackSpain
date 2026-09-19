@@ -8,9 +8,9 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 from langsmith.run_helpers import tracing_context
 
-from src.domain.identity import normalize_text
-from src.domain.triage import triage
-from src.voice.language import decide_language, should_apply_language
+from v2.domain.identity import normalize_text
+from v2.domain.triage import triage
+from v2.language import decide_language, should_apply_language
 from v2.clinic import Dispatcher
 from v2.models import CallState, Intent, Operation, Reply, TurnDecision
 from v2.store import RunStore

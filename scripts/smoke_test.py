@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / "v2" / ".env", override=True)
 
 API_KEY = os.getenv("PLATFORM_API_KEY") or os.getenv("PROSPER_API_KEY", "")
 BASE_URL = (
@@ -28,7 +29,7 @@ def check(label: str, ok: bool, detail: str = "") -> bool:
 
 def main() -> int:
     print(f"Base URL: {BASE_URL}")
-    print(f"API key:  {'set (' + API_KEY[:8] + '...)' if API_KEY else 'MISSING'}")
+    print(f"API key:  {'configured' if API_KEY else 'MISSING'}")
     print()
 
     if not API_KEY:

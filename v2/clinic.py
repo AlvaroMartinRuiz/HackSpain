@@ -4,11 +4,11 @@ import asyncio
 from datetime import timedelta
 from typing import Any
 
-from src.domain.catalog import Catalog
-from src.domain.engine import SchedulingEngine
-from src.domain.identity import normalize_provider_name
-from src.domain.outcomes import ALL_REASONS
-from src.platform_api.client import PlatformClient
+from v2.domain.catalog import Catalog
+from v2.domain.engine import SchedulingEngine
+from v2.domain.identity import normalize_provider_name
+from v2.domain.outcomes import ALL_REASONS
+from v2.platform_api.client import PlatformClient
 from v2.models import CallState, Identity, Intent, Offer, Operation
 from v2.store import RunStore
 

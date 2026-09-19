@@ -1,194 +1,73 @@
-# Guion del fin de semana
+# Socket Wizard v2 runbook
 
-## Desde cero en una máquina nueva
+## Environment
 
-Python 3.11 o más nuevo. Nosotros corremos 3.14 y no hace falta igualarlo: en la
-ruta configurada (Deepgram para escuchar, ElevenLabs para hablar) el audio viaja en µ-law
-de punta a punta y no pasa por `audioop`, que es lo único que cambió en 3.13.
+Use a dedicated `.venv-v2` and the pinned `v2/requirements.txt`. The root requirements file delegates to it. Python 3.12 is used by the container; Python 3.14 is also used for local Windows verification.
 
 ```powershell
-# Windows
-py -3 -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.txt
+py -3 -m venv .venv-v2
+.\.venv-v2\Scripts\python -m pip install -r requirements.txt
+```
+
+On Linux/macOS, use `python3 -m venv .venv-v2` and `.venv-v2/bin/python`.
+
+Create an untracked `v2/.env` from `v2/.env.example`. Root `.env` values are loaded first; the v2 file overrides them. Keep keys out of source, terminal output, URLs, and screenshots.
+
+Required for stock voice: `V2_OPERATOR_TOKEN`, `AI_GATEWAY_API_KEY`, `DEEPGRAM_API_KEY`, `CARTESIA_API_KEY`, `ELEVENLABS_API_KEY`, and a verified `V2_CARTESIA_VOICE_ES`. Enable paid requests deliberately with `V2_ENABLE_PAID=true`. English/Spanish use Cartesia; Catalan uses the configured ElevenLabs voice.
+
+Practice clinic reads additionally need `PLATFORM_API_KEY`. Its base defaults to the documented Prosper API. The cached catalog remains in `data/catalog.json`.
+
+## Start
+
+```powershell
+.\run.ps1
 ```
 
 ```bash
-# macOS / Linux
-python3 -m venv .venv
-./.venv/bin/python -m pip install -r requirements.txt
+bash run.sh
 ```
 
-Las versiones de `requirements.txt` están clavadas a las que hemos probado. No
-las sueltes este fin de semana: dos portátiles con dos stacks distintos es el
-fallo que nadie consigue depurar a las cuatro de la mañana.
+Both run `python -m v2`. The default port is 7861. `GET /health` reports missing configuration without exposing values; configured keys alone do not prove provider acceptance.
 
-Después, las claves. `.env` no está en el repo y no puede estarlo, así que
-**pídeselo a alguien del equipo por un canal privado** en vez de reconstruirlo.
-Si aun así toca reconstruirlo, `.env.example` tiene todos los nombres y qué hace
-cada uno; las que no se adivinan son `PLATFORM_API_KEY`, `DEEPGRAM_API_KEY`,
-`LLM_API_KEY` y `ELEVENLABS_API_KEY`.
+Open `http://127.0.0.1:7861/`. Enter the operator token in the dashboard. Protected HTTP endpoints and the carrier `/ws` use `X-V2-Token`. Do not put long-lived tokens in query strings.
 
-Comprobar que el núcleo está sano — no gasta cuota y no usa modelo:
+The current delivery does not authorize deployment or replacement of an existing remote endpoint. A carrier integration must send the configured authentication header and use mono 8 kHz mu-law Twilio messages.
+
+## Offline checks
 
 ```powershell
-.\.venv\Scripts\python scripts\smoke_test.py     # la clave y el host responden
-.\.venv\Scripts\python scripts\check_domain.py   # fechas, DNI, tipos, cierres
-.\.venv\Scripts\python scripts\check_engine.py   # el motor contra la clínica real
+.\.venv-v2\Scripts\python -m unittest discover -s v2/tests -v
+.\.venv-v2\Scripts\python scripts/check_domain.py
+.\.venv-v2\Scripts\python -m v2.evaluation --language en --database :memory:
+.\.venv-v2\Scripts\python -m v2.evaluation --language es --database :memory:
+.\.venv-v2\Scripts\python -m v2.evaluation --language ca --database :memory:
+.\.venv-v2\Scripts\python -m pip check
 ```
 
-En macOS y Linux es el mismo comando con `./.venv/bin/python scripts/...`, y eso
-vale para todos los scripts del resto de este documento.
+In `services/jev`, use Node 22.18 or later: `npm ci`, `npm run check`, `npm test`.
 
-## Arrancar
+`check_domain.py` is offline. `scripts/check_engine.py` and `scripts/smoke_test.py` contact the real clinic for reads. `scripts/fetch_catalog.py` refreshes the local catalog. `scripts/generate_assets.py --list` lists Quiver assets without making provider requests.
 
-```powershell
-.\run.ps1      # Windows
-```
+## Paid checks
+
+`python -m v2.evaluation --duel --language es` runs a bounded model-to-model text conversation against fixtures. `--review` also sends the synthetic transcript to Jev. These require explicit paid opt-in and the persistent local budget ledger; neither submits to Prosper. Text-only is not equivalent to free when a model is used.
+
+Configure the separate Jev function with `JEV_SERVICE_TOKEN`, `JEV_ENABLE_PAID`, and gateway credentials. Python uses `V2_JEV_URL` over HTTPS and the matching `V2_JEV_TOKEN`. Keep service deployment authorization separate from model-gateway access.
+
+Run paid checks serially within the shared $30 effort cap. Do not reset the database or create fresh ledgers to bypass reservations. Check actual account usage separately; the local ledger does not measure teammates' activity.
+
+`scripts/mock_call.py` sends carrier-format audio to v2 and may consume paid quota. It reads the operator token from configuration. Run it only against non-scored, explicitly approved test sessions.
+
+## Container
 
 ```bash
-bash run.sh    # macOS / Linux
+docker build -f v2/Dockerfile -t socket-wizard-v2 .
 ```
 
-- consola  → <http://localhost:7860/>
-- endpoint → `ws://localhost:7860/ws`
+The image contains only v2 and the clinic catalog. Supply credentials at runtime and mount persistent storage for `v2/.data`; never bake `.env`, recordings, or databases into the image. A running Docker daemon is required to verify the build.
 
-Los dos arrancan lo mismo (`python -m src.main`) y leen `HOST`, `PORT` y
-`RELOAD` de `.env`, así que el puerto que anuncia la consola es siempre el
-puerto en el que está escuchando. Está en pie cuando `/health` contesta:
+## Diagnostics
 
-```json
-{"status": "ok", "voice_ready": true, "missing_keys": []}
-```
+Inspect the stored run report for caller turns, planned/presented responses, clinic reads, guard rejections, receipts, and provider errors. WAV availability and non-silent socket sends are distinct from verified playback. HTTP acceptance and local completion are not official scored passes.
 
-`missing_keys` con algo dentro es un `.env` incompleto, y el agente se quedará
-mudo justo en esa parte de la llamada.
-
-**`RELOAD=true` sólo mientras editas.** Vigila el árbol y reinicia al guardar,
-que durante un scored run tira la llamada viva, y en un Switchboard de veinte las veinte.
-
-## Exponerlo
-
-```powershell
-ngrok http 7860 --region eu
-```
-
-Europa, no otro continente: son frames de 20 ms en tiempo real y cada salto se
-paga en todos ellos. Con cuenta, dominio fijo para no volver a tocar Settings:
-
-```powershell
-ngrok http --url=tu-nombre.ngrok-free.app 7860
-```
-
-En el dashboard, Settings → Integration:
-
-| Campo | Valor |
-| --- | --- |
-| Endpoint | `wss://tu-nombre.ngrok-free.app/ws` — con esquema y con la ruta |
-| Headers | vacío |
-
-`https://` no es el endpoint y olvidar `/ws` es el fallo más común. Compruébalo
-antes de entregarlo:
-
-```powershell
-.\.venv\Scripts\python scripts\mock_call.py --url wss://tu-nombre.ngrok-free.app/ws
-```
-
-### La consola a través del túnel
-
-ngrok publica el puerto entero, y la consola enseña teléfonos, fichas,
-transcripciones y grabaciones. Por eso, a través del túnel pide `CONSOLE_TOKEN`
-(del `.env`). Ábrela una vez así y una cookie te mantiene dentro dos días:
-
-```
-https://tu-nombre.ngrok-free.app/?token=<CONSOLE_TOKEN>
-```
-
-Sin token responde 401. `/ws` y `/health` no lo necesitan (la plataforma solo usa
-`/ws`), y en `http://localhost:7860/` desde la propia máquina tampoco. No
-compartas la URL con el token fuera del equipo.
-
-## Voz: Deepgram en la escucha, ElevenLabs en la voz
-
-STT es Nova-3 (`STT_PROVIDER=deepgram`): más rápido en el cable, `numerals` para
-DNI y teléfono, y Catalán con el cierre `language=ca` cuando el léxico lo
-detecta. TTS sigue en ElevenLabs (`TTS_PROVIDER=elevenlabs`): Flash en
-español/inglés, v3 conversacional en catalán. Aura es la reserva si Flash
-responde 429.
-
-Scribe queda como interruptor:
-
-```
-STT_PROVIDER=elevenlabs
-```
-
-El plan Creator de ElevenLabs tiene **131.000 caracteres de TTS**. Un scored
-run es una sola llamada, no un Run All de dieciocho minutos. Aun así no la
-uséis para ensayar frases. La lógica se itera en texto:
-
-```powershell
-.\.venv\Scripts\python scripts\rehearse.py
-```
-
-Llamadas de práctica **solo** para lo que depende del audio: ruido (p12),
-interrupciones (p13), idiomas (p11).
-
-## Antes de cada scored run
-
-```powershell
-# El cable de una llamada, que es lo que ahora puntúa
-.\.venv\Scripts\python scripts\mock_call.py --calls 1 --seconds 6
-
-# Los arreglos de voz, consola y herramientas (sin modelo ni minutos de voz)
-.\.venv\Scripts\python scripts\check_fixes.py
-
-# La lógica sigue dando el registro correcto
-.\.venv\Scripts\python scripts\rehearse.py
-```
-
-El Switchboard (problema 2) sigue siendo 5/10/20 a la vez y no puntúa:
-`mock_call.py --calls 10` o `--calls 20` cuando toque ese check.
-
-Pon `TTS_PROVIDER=elevenlabs` antes de puntuar. Si `mock_call` reporta alguna
-llamada sin audio, o la consola muestra errores `tts`, para y arréglalo: una
-llamada muda es un caso fallado.
-
-Un scored run es **un problema, una llamada**, y hay **doce minutos** de espera
-después. Cada problema paga las primeras cuatro aprobadas; un fallo no ocupa
-hueco, solo el cooldown. Los Run All que ya hiciste siguen contando. Ensaya en
-texto entre medias. Vigilad los caracteres de ElevenLabs entre un run y el
-siguiente.
-
-## Cuando algo va mal
-
-| Lo que ves | Dónde mirar |
-| --- | --- |
-| El caso falla y no sabes por qué | consola → la llamada → pestaña **Decisiones**: la traza dice qué ventana se pidió, cuántos huecos volvieron y qué regla bloqueó |
-| El registro salió raro | pestaña **Registro**: el payload exacto que se envió y el HTTP que devolvió |
-| El agente se inventó algo | pestaña **Herramientas**: si no hay una llamada a herramienta detrás de lo que dijo, el prompt necesita apretarse |
-| `404` al enviar | el `call_id` no es el `start.callSid`, o la llamada era un ensayo local |
-| `410` al enviar | llegó tarde: la ventana se cierra 30 s después de cerrarse el socket |
-| `409` al enviar | acción idéntica repetida. Es lo esperado en un reintento, no un fallo |
-| `422` al registrar | la letra del DNI no cuadra con los dígitos |
-| El agente no habla | `GET /health` → `missing_keys` |
-
-Una llamada terminada se puede volver a leer entera mucho después:
-
-```
-GET /api/console/calls/{call_id}/replay
-```
-
-## Para el jurado
-
-La consola es la demo, y se conduce en directo, no en una diapositiva.
-
-1. Abre `http://localhost:7860/` en grande. Arriba se ve qué modelo, qué voz y
-   qué endpoint están activos.
-2. Lanza `mock_call.py --calls 10`: diez llamadas aparecen a la vez y se ve el
-   pico de concurrencia y la latencia mediana moverse.
-3. Que llamen ellos desde la plataforma. Mientras hablan se ve la transcripción
-   turno a turno, y el corte marcado en el punto exacto donde interrumpieron.
-4. Al colgar, abre **Decisiones** y responde "¿por qué dijo eso?" con la traza
-   delante: la ventana de fechas que pidió, los huecos que volvieron, la regla
-   que bloqueó, el hueco que eligió y por qué.
-5. Enseña `scripts/rehearse.py` corriendo: es cómo sabemos que funciona, aparte
-   de que funcionara en su llamada.
+A `401` means operator authentication failed; missing configuration is shown by `/health`. A failed or unknown action receipt must be reconciled, not blindly replayed. Preserve runtime evidence when debugging; do not delete databases or recordings to make metrics look clean.

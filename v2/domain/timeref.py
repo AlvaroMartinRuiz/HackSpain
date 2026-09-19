@@ -12,7 +12,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from src.domain.identity import normalize_text
+from v2.domain.identity import normalize_text
 
 MADRID = ZoneInfo("Europe/Madrid")
 

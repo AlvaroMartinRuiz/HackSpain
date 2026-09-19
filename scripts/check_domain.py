@@ -13,19 +13,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
-from src.domain.catalog import Catalog, age_months  # noqa: E402
-from src.domain.engine import SchedulingEngine, Slot, SlotSearch  # noqa: E402
-from src.domain.gazetteer import locate  # noqa: E402
-from src.domain.identity import (  # noqa: E402
+from v2.domain.catalog import Catalog, age_months  # noqa: E402
+from v2.domain.engine import SchedulingEngine, Slot, SlotSearch  # noqa: E402
+from v2.domain.gazetteer import locate  # noqa: E402
+from v2.domain.identity import (  # noqa: E402
     normalize_email,
     normalize_phone,
     parse_national_id,
     peel_insurer_from_email,
     split_id_and_phone,
 )
-from src.domain.outcomes import pick_blocking_reason  # noqa: E402
-from src.domain.timeref import MADRID, resolve_when  # noqa: E402
-from src.domain.triage import triage  # noqa: E402
+from v2.domain.outcomes import pick_blocking_reason  # noqa: E402
+from v2.domain.timeref import MADRID, resolve_when  # noqa: E402
+from v2.domain.triage import triage  # noqa: E402
 
 FAILURES: list[str] = []
 

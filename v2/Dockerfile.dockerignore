@@ -1,6 +1,4 @@
 **
-!src/
-!src/**
 !data/
 !data/catalog.json
 !v2/

@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from src.domain.identity import normalize_text
+from v2.domain.identity import normalize_text
 
 # Escalate, book nothing.
 RED_FLAGS: tuple[tuple[str, str], ...] = (

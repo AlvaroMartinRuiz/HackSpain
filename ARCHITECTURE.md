@@ -1,133 +1,51 @@
-# Socket Wizard — how it is built
+# Socket Wizard architecture
 
-El reto dice, con todas las letras, que el modelo de voz es *un componente* de un
-sistema que diseñas tú, no el sistema. Esa frase es la que decide esta
-arquitectura: **el modelo conduce la conversación, pero no decide nada que acabe
-en el registro.**
+V2 is the sole runtime. Domain rules and utilities have been migrated into its package; there is no dependency on the removed v1 application.
 
-Ningún id, ningún minuto, ningún tipo de cita, ninguna póliza y ningún motivo de
-rechazo sale de lo que el modelo "cree". Todos salen de lo que la clínica ha
-devuelto, pasando por código determinista.
+```text
+Carrier / browser audio
+  -> authenticated FastAPI WebSocket
+  -> Pipecat transport and Deepgram recognition
+  -> caller-turn aggregation
+  -> LangGraph CallController
+       -> Vercel model: bounded, typed interpretation
+       -> ClinicBoundary: identity, availability, validated offers
+            -> domain rules + Prosper read API
+       -> Dispatcher: idempotent action receipts
+  -> deterministic response text
+  -> Cartesia (English/Spanish) or ElevenLabs (Catalan)
+  -> paced audio on the caller socket
 
-```
-        el harness llama
-               │
-               ▼
-   ┌───────────────────────────┐
-   │  /ws  Twilio Media Streams│  src/telephony/twilio_ws.py
-   │  una sesión por socket    │
-   └─────────────┬─────────────┘
-                 ▼
-   ┌───────────────────────────┐      ┌──────────────────────────┐
-   │      CallSession          │─────▶│  consola en directo      │
-   │  audio, turnos, submits   │      │  src/obs + src/web       │
-   └──┬────────────────┬───────┘      └──────────────────────────┘
-      │                │
-      ▼                ▼
-  ┌────────┐      ┌──────────────┐
-  │ voz    │      │  Agent       │  bucle de turnos con herramientas
-  │ STT/TTS│      │ src/agent    │
-  └────────┘      └──────┬───────┘
-                         │ sólo herramientas, nunca datos inventados
-                         ▼
-              ┌────────────────────────┐
-              │  SchedulingEngine      │  núcleo determinista
-              │  src/domain            │
-              └──────────┬─────────────┘
-                         ▼
-              ┌────────────────────────┐
-              │  API de la clínica     │  lectura + submits
-              │  src/platform_api      │
-              └────────────────────────┘
+Events/state/receipts/budget -> SQLite -> operator API -> dashboard
+Successful socket audio -> local WAV files -> authenticated playback
+Synthetic conversation -> optional Jev service -> model assessment
 ```
 
-## La regla que ordena todo lo demás
+## Conversation and business boundaries
 
-El modelo elige **entre opciones numeradas** que le da el motor. Cuando dice
-"reserva la dos", el motor coge el hueco número dos —el que la API devolvió— y
-construye el payload con los ids exactos de ese hueco. El modelo nunca escribe
-una fecha, un `provider_id` ni un `appointment_type_id`.
+`CallState` owns an independent intent for each request and patient. An intent collects identity and criteria, prepares offers, waits for confirmation, and completes only after an accepted action receipt. Offer revisions invalidate outdated confirmations. Presentation and explicit acceptance are separate from model interpretation.
 
-Por eso las trampas del reto no dependen de que el modelo "se acuerde":
+The model does not construct submission payloads or decide the server's execution mode. The scheduling engine resolves spoken times in Europe/Madrid and uses identifiers, appointment types, insurance coverage, and availability from the clinic. Emergency handling can bypass model interpretation.
 
-| Trampa del reto | Quién la resuelve |
-| --- | --- |
-| El tipo de cita sigue al historial, no a la petición | `availability` lo devuelve; el motor lo copia tal cual |
-| El minuto exacto con offset de Europe/Madrid | `timeref.format_slot` |
-| Nunca el mismo día de la llamada | `engine._apply_floor` |
-| "El jueves que viene", "a primera hora del lunes 12" | `timeref.resolve_when` |
-| Domingos, sábados sólo en Centro, 12 de octubre cerrado | `catalog.is_open` + `next_open_day` |
-| El motivo de rechazo debe nombrar la regla | `outcomes.pick_blocking_reason` desde `blocked` |
-| La letra del DNI se recalcula desde los dígitos | `identity.parse_national_id` |
-| Sáez / Sáenz, Iglesias / Iglesia | `catalog.find_providers_by_name` devuelve las dos |
-| La sede más cercana que *pueda* atender | `engine.nearest_site` + `gazetteer` |
-| Repartir carga entre médicos | desempate por diario más libre en `engine._pick` |
-| Segunda póliza que hay que preguntar | `find_appointments(also_consider_insurer=…)` |
+`CallController` runs its interpret/apply graph per turn. Epochs reject obsolete responses after interruptions. An in-flight action is settled rather than blindly cancelled and retried. Per-call state is not shared between sockets.
 
-## Las tres garantías que evitan un cero
+## External providers
 
-1. **Nunca una llamada muda.** El silencio siempre está mal, así que
-   `CallSession.finalize` envía un `NO_ACTION` con el motivo más plausible si la
-   llamada termina sin registro. Un agente que se cae no puntúa igual que uno
-   que rechaza bien, pero al menos no puntúa como uno que calló.
-2. **Se envía en cuanto se decide, no al colgar.** Llegar temprano nunca es
-   motivo de rechazo; llegar tarde sí. La ventana se cierra 30 s después de que
-   cierre el socket, y no se apura.
-3. **Nada compartido entre sockets.** Cada conexión crea su propio
-   transcriptor, su propia voz, su propia conversación y su propio cliente HTTP.
-   Es el error que este reto busca.
+- Prosper supplies the read-only clinic and accepts reported appointment outcomes. No Twilio account is required: Prosper speaks Twilio's Media Streams protocol.
+- Deepgram Nova-3 transcribes streaming speech.
+- Cartesia synthesizes English/Spanish stock voices; ElevenLabs supplies Catalan speech.
+- Vercel AI Gateway interprets caller turns and can power a synthetic caller in bounded evaluations.
+- Jev is a separate authenticated TypeScript service using the AI SDK evaluation interface. Its fixed rubric checks unanswered requests, repeated questions, and premature success claims. It is not a conversation generator or an official grader.
+- Quiver is an optional offline asset-generation tool. The operator interface serves committed SVG files without making Quiver requests during calls.
 
-## Barge-in
+## Storage and evidence
 
-Scribe (y Deepgram, si se vuelve a él) mandan resultados parciales. El primer
-parcial con contenido suficiente mientras el agente habla corta la
-reproducción: se vacían las dos colas, se sube un contador de generación (lo
-que hace que el audio en vuelo se descarte), se manda `clear` por el cable y
-**se recorta el último turno del agente a lo que el paciente realmente llegó a
-oír**, proporcional a los frames enviados. Sin ese recorte el modelo cree haber
-dicho cosas que nadie escuchó.
+`RunStore` persists state, ordered events, action receipts, and budget reservations in `v2/.data/runs.db`. Recordings live under `v2/.data/audio/`. The code/catalog fingerprint and provider manifest distinguish executions. Runtime data and credentials are excluded from Git and container builds.
 
-Un parcial de menos de dos palabras no interrumpe, y tampoco los primeros
-350 ms de habla del agente: con ruido a 5 dB de SNR (problema 12) un gate más
-sensible corta la llamada cada dos frases. Ese umbral de dos palabras en un
-resultado interino es el que recomienda Deepgram para Nova-3; un final de una
-sola palabra sí corta. Scribe filtra ruido de fondo en la sesión; el audio a
-Nova-3, si se usa, va sin reducir ruido.
+Simulated receipts, HTTP acknowledgements, deterministic fixture grades, and model assessments are not interchangeable. Official grade remains unknown unless authoritative evidence is imported. A successful audio send does not prove audible caller playback.
 
-## La consola
+The local ledger has a $30 maximum reservation cap. It is not provider-enforced and cannot see teammates' unrelated account spending. Unknown charges remain reserved until reconciliation.
 
-La mitad del reto que no tiene solucionario. En `http://localhost:7860/`:
+## Release boundary
 
-- llamadas en curso con su estado, y el histórico
-- transcripción en directo, con los cortes marcados donde ocurrieron
-- **"por qué dijo eso"**: cada decisión con su traza — qué ventana de fechas se
-  pidió, cuántos huecos volvieron, qué regla bloqueó, por qué se eligió ese hueco
-- cada consulta al EHR con sus parámetros, su resumen y su latencia
-- el registro enviado, con el payload exacto y el código HTTP
-- latencia de respuesta p50/p90, concurrencia máxima, llamadas sin registro
-
-Todo se escribe también en SQLite (`data/calls.db`), así que una llamada se
-puede volver a explicar mucho después de que el socket se cerrara:
-`GET /api/console/calls/{id}/replay`.
-
-## El ensayo, que es donde de verdad se itera
-
-`POST /api/console/rehearse` corre una llamada completa **en texto**: el mismo
-cerebro, las mismas herramientas, la misma clínica, sin audio y sin cuota. Con
-`dry_run` el registro se queda en local, así que se puede correr sin límite.
-
-`scripts/rehearse.py` lleva escenarios con la forma de los problemas puntuados y
-comprueba el registro campo a campo, construyéndolos sobre pacientes reales
-sacados del directorio en el momento. Un caso puntuado no te dice qué campo
-perdiste hasta el lunes; esto sí.
-
-## Qué falta y se sabe
-
-- Hay una llamada con ruido de fondo real que no se ha medido todavía contra
-  las cuatro texturas (calle, tele, habitación, coche). El gate de barge-in
-  sigue dos palabras en un parcial, una en un final. Scribe filtra el fondo;
-  Nova-3, si se usa, no.
-- El gazetteer cubre municipios, distritos, códigos postales de la corona y
-  los hitos de los casos públicos (Sol, Preciados, Castilla, Castellana). Una
-  calle de un pueblo que no esté en esa lista se queda sin resolver y el
-  agente pregunta.
+Simulation is the default. Practice uses clinic reads but still records actions locally. Paid execution needs explicit configuration. Live operation requires provider/carrier acceptance and explicit approval; the current integration evidence is maintained in `docs/V2-STATUS.md`. This implementation effort is code delivery, not permission to deploy or change a remote endpoint.

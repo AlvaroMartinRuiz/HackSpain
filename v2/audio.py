@@ -6,7 +6,7 @@ import re
 import time
 from pathlib import Path
 
-from src.voice.audio import ulaw_to_wav
+from v2.codecs import ulaw_to_wav
 
 
 class RunTape:

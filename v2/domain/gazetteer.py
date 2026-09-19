@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from src.domain.identity import normalize_text
+from v2.domain.identity import normalize_text
 
 PLACES: dict[str, tuple[float, float]] = {
     # Madrid districts

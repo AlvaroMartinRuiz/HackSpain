@@ -13,9 +13,9 @@ from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from src.config import settings
-from src.domain.geo import haversine_km
-from src.domain.identity import normalize_provider_name, normalize_text
+from v2.config import Config
+from v2.domain.geo import haversine_km
+from v2.domain.identity import normalize_provider_name, normalize_text
 
 WEEKDAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
@@ -161,7 +161,7 @@ class Catalog:
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "Catalog":
-        target = path or Path(settings.catalog_path)
+        target = path or Config().catalog_path
         raw = json.loads(target.read_text(encoding="utf-8"))
         return cls(raw)
 

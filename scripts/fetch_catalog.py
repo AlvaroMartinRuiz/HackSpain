@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / "v2" / ".env", override=True)
 
 API_KEY = os.getenv("PLATFORM_API_KEY", "")
 BASE_URL = (os.getenv("PLATFORM_API_BASE_URL") or "").rstrip("/")

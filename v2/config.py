@@ -32,6 +32,12 @@ class Config:
     jev_token: str = field(default_factory=lambda: os.getenv("V2_JEV_TOKEN", ""), repr=False)
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("V2_DATA_DIR", str(ROOT / "v2" / ".data"))))
     revision: str = field(default_factory=lambda: os.getenv("V2_BUILD_REVISION", "unversioned-working-tree"))
+    api_key: str = field(default_factory=lambda: os.getenv("PLATFORM_API_KEY") or os.getenv("PROSPER_API_KEY", ""), repr=False)
+    api_base_url: str = field(default_factory=lambda: (os.getenv("PLATFORM_API_BASE_URL") or os.getenv("PROSPER_BASE_URL") or "https://hackspain.getprosperapp.com/api/v1").rstrip("/"))
+    catalog_path: Path = field(default_factory=lambda: Path(os.getenv("CATALOG_PATH", str(ROOT / "data" / "catalog.json"))))
+    quiver_api_key: str = field(default_factory=lambda: os.getenv("QUIVER_API_KEY") or os.getenv("QUIVERAI_API_KEY", ""), repr=False)
+    quiver_base_url: str = field(default_factory=lambda: os.getenv("QUIVER_BASE_URL", "https://api.quiver.ai").rstrip("/"))
+    quiver_model: str = field(default_factory=lambda: os.getenv("QUIVER_MODEL", ""))
     call_limit_s: int = 145
     completion_grace_s: float = 15
 
@@ -54,8 +60,8 @@ class Config:
 
     def manifest(self) -> dict:
         digest = hashlib.sha256()
-        sources = [*(ROOT / "v2").glob("*.py"), *(ROOT / "src" / "domain").glob("*.py"),
-                   ROOT / "src" / "platform_api" / "client.py", ROOT / "data" / "catalog.json"]
+        sources = [*(ROOT / "v2").glob("*.py"), *(ROOT / "v2" / "domain").glob("*.py"),
+                   ROOT / "v2" / "platform_api" / "client.py", self.catalog_path]
         for path in sorted(sources):
             digest.update(str(path.relative_to(ROOT)).replace("\\", "/").encode() + path.read_bytes())
         return {"schema": 1, "revision": self.revision, "code_sha256": digest.hexdigest(),

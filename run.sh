@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # run.ps1 for macOS and Linux. Same port, same .env, same everything.
-#   Console:  http://localhost:7860/
-#   Endpoint: ws://localhost:7860/ws   (wss:// through ngrok)
+#   Console:  http://localhost:7861/
+#   Endpoint: ws://localhost:7861/ws   (wss:// through ngrok)
 set -euo pipefail
 cd "$(dirname "$0")"
 
-python=./.venv/bin/python
+python=./.venv-v2/bin/python
 if [ ! -x "$python" ]; then
-  echo "No hay .venv aquí. RUNBOOK.md -> 'Desde cero en una máquina nueva'." >&2
+  echo "No hay .venv-v2 aquí. RUNBOOK.md -> 'Desde cero en una máquina nueva'." >&2
   exit 1
 fi
 
-exec "$python" -m src.main
+exec "$python" -m v2

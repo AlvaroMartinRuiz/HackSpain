@@ -1,5 +1,9 @@
 # V2 parallel delivery plan
 
+## Active scope override
+
+The user subsequently requested v2 as the sole application and explicitly confirmed deletion of the v1 runtime, old dashboards, obsolete scripts, and `docs/PLAN_ARREGLOS.md`. The coordinator migrates shared scheduling/client/audio/language/design code into v2 before deletion. Earlier instructions below to preserve `src/` or the v1 endpoint are historical and superseded for code delivery. Runtime credentials, databases, recordings, and existing remote deployments remain untouched. Five isolated agent branches launch from `b32caed`; assignments are in `V2-STATUS.md`. Paid checks are authorized within the existing shared $30 cap, run serially by the coordinator. Deployment and endpoint switching are not authorized.
+
 ## Goal and baseline
 
 Ship a functional, observable receptionist with stock voices first. Voice cloning is the final enhancement, not a dependency. This plan can be handed unchanged to teammates or coding agents.

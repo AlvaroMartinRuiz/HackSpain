@@ -29,7 +29,8 @@ sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 import websockets  # noqa: E402
 from websockets.exceptions import ConnectionClosedOK  # noqa: E402
 
-from src.voice.audio import (  # noqa: E402
+from v2.config import Config
+from v2.codecs import (  # noqa: E402
     FRAME_BYTES,
     FRAME_MS,
     frames,
@@ -71,7 +72,8 @@ async def one_call(url: str, index: int, seconds: float, payload: bytes | None) 
     started = time.perf_counter()
 
     try:
-        async with websockets.connect(url, open_timeout=10, close_timeout=5) as socket:
+        async with websockets.connect(url, additional_headers={"X-V2-Token": Config().operator_token},
+                                      open_timeout=10, close_timeout=5) as socket:
             outcome.connected = True
             outcome.connect_ms = int((time.perf_counter() - started) * 1000)
             stream_sid = f"MZ{uuid.uuid4().hex[:30]}"
@@ -149,7 +151,8 @@ async def one_call(url: str, index: int, seconds: float, payload: bytes | None) 
 
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", default="ws://127.0.0.1:7860/ws")
+    config = Config()
+    parser.add_argument("--url", default=f"ws://127.0.0.1:{config.port}/ws")
     parser.add_argument("--calls", type=int, default=1, help="how many sockets at once")
     parser.add_argument("--seconds", type=float, default=8.0, help="how long to hold each one")
     parser.add_argument("--wav", type=Path, default=None, help="16-bit mono WAV to send as the caller")

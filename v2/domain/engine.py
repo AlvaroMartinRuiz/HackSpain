@@ -12,9 +12,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any, Optional, Sequence
 
-from src.domain import gazetteer
-from src.domain.catalog import Catalog, age_months
-from src.domain.identity import (
+from v2.domain import gazetteer
+from v2.domain.catalog import Catalog, age_months
+from v2.domain.identity import (
     normalize_email,
     normalize_phone,
     normalize_text,
@@ -22,8 +22,8 @@ from src.domain.identity import (
     peel_insurer_from_email,
     split_id_and_phone,
 )
-from src.domain.outcomes import pick_blocking_reason
-from src.domain.timeref import (
+from v2.domain.outcomes import pick_blocking_reason
+from v2.domain.timeref import (
     MADRID,
     WhenSpec,
     format_slot,
@@ -32,7 +32,7 @@ from src.domain.timeref import (
     parse_slot,
     resolve_when,
 )
-from src.platform_api.client import PlatformClient, PlatformError
+from v2.platform_api.client import PlatformClient, PlatformError
 
 
 @dataclass

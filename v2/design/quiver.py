@@ -1,7 +1,7 @@
 """QuiverAI — the vector graphics the console is drawn with.
 
 Quiver generates SVG, not data, so nothing here runs during a call. The
-generator script calls it once, the markup lands in ``src/web/static/assets``
+generator script calls it once, the markup lands in ``v2/web/assets``
 and gets committed; from then on the dashboard reads the icons off disk. A jury
 demo on a dead venue wifi still has its icons, and a page reload never spends a
 credit.
@@ -20,7 +20,9 @@ from typing import Any, Optional
 
 import httpx
 
-from src.config import settings
+from v2.config import Config
+
+settings = Config()
 
 GENERATIONS = "/v1/svgs/generations"
 ANIMATIONS = "/v1/svgs/animations"

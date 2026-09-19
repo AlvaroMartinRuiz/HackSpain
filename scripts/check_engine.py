@@ -14,10 +14,10 @@ from typing import Any, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
-from src.domain.catalog import Catalog  # noqa: E402
-from src.domain.engine import SchedulingEngine  # noqa: E402
-from src.domain.timeref import now_madrid, parse_slot  # noqa: E402
-from src.platform_api.client import PlatformClient  # noqa: E402
+from v2.domain.catalog import Catalog  # noqa: E402
+from v2.domain.engine import SchedulingEngine  # noqa: E402
+from v2.domain.timeref import now_madrid, parse_slot  # noqa: E402
+from v2.platform_api.client import PlatformClient  # noqa: E402
 
 # The directory needs a given name plus a surname, or one exact field, so the
 # sample is drawn by date of birth instead.

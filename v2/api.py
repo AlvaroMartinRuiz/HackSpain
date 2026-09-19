@@ -13,8 +13,8 @@ from zoneinfo import ZoneInfo
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket
 from fastapi.responses import FileResponse
 
-from src.domain.catalog import Catalog
-from src.platform_api.client import PlatformClient
+from v2.domain.catalog import Catalog
+from v2.platform_api.client import PlatformClient
 from v2.clinic import ClinicBoundary, Dispatcher, FixtureClinic
 from v2.config import Config
 from v2.evaluation import demo_request, metrics, rehearse

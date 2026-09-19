@@ -2,7 +2,7 @@
 
 Credits are finite and a redraw of an icon that did not change is a wasted one,
 so every asset is keyed by the hash of its prompt and style. A second run costs
-nothing and prints "cached"; editing a prompt in src/design/assets.py is what
+nothing and prints "cached"; editing a prompt in v2/design/assets.py is what
 makes that one — and only that one — cost again.
 
     python scripts/generate_assets.py --list           # the catalogue, no key needed
@@ -33,14 +33,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from src.config import settings  # noqa: E402
-from src.design import assets as catalogue  # noqa: E402
-from src.design.assets import Asset  # noqa: E402
-from src.design.quiver import (  # noqa: E402
+from v2.config import Config  # noqa: E402
+from v2.design import assets as catalogue  # noqa: E402
+from v2.design.assets import Asset  # noqa: E402
+from v2.design.quiver import (  # noqa: E402
     QuiverClient, QuiverError, hardcoded_colours, themeable,
 )
 
-ASSET_DIR = Path(__file__).resolve().parent.parent / "src" / "web" / "static" / "assets"
+settings = Config()
+ASSET_DIR = Path(__file__).resolve().parent.parent / "v2" / "web" / "assets"
 MANIFEST = ASSET_DIR / "manifest.json"
 
 # Only the live states earn motion; a calendar with a check mark on it has
