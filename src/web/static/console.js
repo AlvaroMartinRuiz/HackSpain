@@ -128,7 +128,13 @@ function renderDetail() {
   if (patient.has_visited_before !== undefined) {
     chips.push(`<span class="badge">${patient.has_visited_before ? "paciente conocido" : "primera visita"}</span>`);
   }
-  if (detail.language) chips.push(`<span class="badge">${escapeHtml(detail.language)}</span>`);
+  if (detail.language) {
+    const confidence = detail.language_confidence != null
+      ? ` ${Math.round(Number(detail.language_confidence) * 100)}%`
+      : "";
+    const source = detail.language_source ? ` · ${detail.language_source}` : "";
+    chips.push(`<span class="badge">${escapeHtml(detail.language + confidence + source)}</span>`);
+  }
   (detail.actions || []).forEach((action) => {
     chips.push(`<span class="badge ${action.accepted ? "ok" : "err"}">${escapeHtml(action.action)} · ${action.status}</span>`);
   });

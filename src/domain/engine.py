@@ -7,6 +7,7 @@ decided here, from what the clinic actually returned.
 
 from __future__ import annotations
 
+from difflib import get_close_matches
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any, Optional, Sequence
@@ -602,6 +603,20 @@ class SchedulingEngine:
 
     # ---- registration -------------------------------------------------
 
+    def resolve_insurer(self, spoken: Any) -> Optional[str]:
+        """Map a spoken plan name to a clinic id, tolerating one STT vowel."""
+        key = normalize_text(str(spoken or "")).replace(" ", "_")
+        aliases: dict[str, str] = {}
+        for plan_id, plan in self.catalog.plans.items():
+            aliases[normalize_text(plan_id).replace(" ", "_")] = plan_id
+            name = normalize_text(str(plan.get("name") or "")).replace(" ", "_")
+            if name:
+                aliases[name] = plan_id
+        if key in aliases:
+            return aliases[key]
+        close = get_close_matches(key, aliases, n=1, cutoff=0.82)
+        return aliases[close[0]] if close else None
+
     def plan_registration(self, fields: dict[str, Any]) -> tuple[Optional[dict[str, Any]], list[str]]:
         """Build a registration payload, and name whatever is still missing."""
         problems: list[str] = []
@@ -623,8 +638,8 @@ class SchedulingEngine:
         if len(phone) != 9:
             problems.append("phone is not nine digits")
 
-        insurer = normalize_text(str(fields.get("insurer", "")))
-        if insurer not in self.catalog.plans:
+        insurer = self.resolve_insurer(fields.get("insurer"))
+        if insurer is None:
             problems.append(f"insurer {fields.get('insurer')!r} is not one of the clinic's plans")
 
         born = str(fields.get("date_of_birth", ""))[:10]

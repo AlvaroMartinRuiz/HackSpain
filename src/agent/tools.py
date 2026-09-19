@@ -214,8 +214,15 @@ SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "Who the appointment is for, as returned by open_chart.",
                     },
+                    "caller_confirmed": {
+                        "type": "boolean",
+                        "description": (
+                            "True only when the caller explicitly accepted this exact option "
+                            "in their latest turn. A symptom or a follow-up question is not consent."
+                        ),
+                    },
                 },
-                "required": ["option", "patient_id"],
+                "required": ["option", "patient_id", "caller_confirmed"],
             },
         },
     },
@@ -294,6 +301,13 @@ SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "reason": {"type": "string", "enum": list(ALL_REASONS)},
                     "explanation": {"type": "string", "description": "One line for the record."},
+                    "alternatives_declined": {
+                        "type": "boolean",
+                        "description": (
+                            "For provider-specific refusals, true only after the caller explicitly "
+                            "declined another doctor in the same specialty."
+                        ),
+                    },
                     "caller_has_no_other_plan": {
                         "type": "boolean",
                         "description": "True only once you asked whether they hold another "
@@ -507,7 +521,9 @@ class ToolBox:
              "uncovered_locations": plan["uncovered_location_names"],
              "refused_by": plan["refused_by"]}
             for plan in self.catalog.plans.values()
-        ]}
+        ], "pricing_available": False,
+            "guidance": "The clinic has coverage rules but no policy prices or copays. "
+                        "Direct price questions to the insurer without inventing a figure."}
 
     async def _tool_nearest_site(self, args: dict[str, Any]) -> dict[str, Any]:
         return self.engine.nearest_site(str(args.get("where", "")), args.get("specialty_id"))
@@ -539,8 +555,8 @@ class ToolBox:
         unrecognised: Optional[str] = None
         spoken_insurer = str(args.get("also_consider_insurer") or "").strip()
         if spoken_insurer:
-            extra = normalize_text(spoken_insurer).replace(" ", "_")
-            if extra in self.catalog.plans:
+            extra = self.engine.resolve_insurer(spoken_insurer)
+            if extra is not None:
                 if extra not in self.named_insurers:
                     self.named_insurers.append(extra)
             else:
@@ -648,6 +664,12 @@ class ToolBox:
     # ---- writes -------------------------------------------------------
 
     async def _tool_book_slot(self, args: dict[str, Any]) -> dict[str, Any]:
+        if args.get("caller_confirmed") is not True:
+            return {
+                "booked": False,
+                "error": "the caller has not explicitly accepted this exact option",
+                "guidance": "Read back the day, time and doctor, then wait for a clear yes.",
+            }
         slot = self.options.get(int(args.get("option", 0) or 0))
         if slot is None:
             return {"error": "that option is not on the table",
@@ -683,7 +705,9 @@ class ToolBox:
                 "doctor": plan.provider_name,
                 "site": plan.location_id,
             },
-            "guidance": "Read the appointment back to the caller and close warmly.",
+            "reference_number": None,
+            "guidance": "Read the appointment back once and close warmly. The platform did not "
+                        "provide a reference number, so never invent one.",
         }
 
     async def _tool_reschedule_appointment(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -779,6 +803,15 @@ class ToolBox:
 
     async def _tool_end_without_booking(self, args: dict[str, Any]) -> dict[str, Any]:
         reason = self._clean_reason(args.get("reason"))
+        # A named doctor who cannot see them is a redirect before it is a refusal.
+        redirectable = {"provider_not_in_network", "provider_on_leave", "provider_not_found"}
+        if reason in redirectable and args.get("alternatives_declined") is not True:
+            return {
+                "recorded": False,
+                "reason": reason,
+                "guidance": "Do not close the record yet. Offer another doctor in the same "
+                            "specialty; only retry after the caller explicitly declines.",
+            }
         # The flag is the model's word; what the agent actually said on the call
         # is what shows the question was asked.
         if (reason in INSURANCE_REASONS and not self.named_insurers

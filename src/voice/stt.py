@@ -50,13 +50,14 @@ class DeepgramTranscriber:
         self._keepalive: Optional[asyncio.Task] = None
         self._pending: list[str] = []
         self._language: Optional[str] = None
+        self._stream_language = settings.deepgram_language
         self._closed = False
         self.bytes_sent = 0
 
-    def _url(self) -> str:
+    def _url(self, language: Optional[str] = None) -> str:
         params = {
             "model": settings.deepgram_model,
-            "language": settings.deepgram_language,
+            "language": language or self._stream_language,
             "encoding": "mulaw",
             "sample_rate": "8000",
             "channels": "1",
@@ -69,16 +70,40 @@ class DeepgramTranscriber:
         }
         return f"{DEEPGRAM_URL}?{urllib.parse.urlencode(params)}"
 
-    async def start(self) -> None:
+    async def _connect(self, language: Optional[str] = None):
         import websockets
 
         headers = {"Authorization": f"Token {settings.deepgram_api_key}"}
         try:
-            self._socket = await websockets.connect(self._url(), additional_headers=headers)
+            return await websockets.connect(self._url(language), additional_headers=headers)
         except TypeError:  # websockets < 14 named it differently
-            self._socket = await websockets.connect(self._url(), extra_headers=headers)
-        self._reader = asyncio.create_task(self._read())
+            return await websockets.connect(self._url(language), extra_headers=headers)
+
+    async def start(self) -> None:
+        self._socket = await self._connect()
+        self._reader = asyncio.create_task(self._read(self._socket))
         self._keepalive = asyncio.create_task(self._ping())
+
+    async def set_stream_language(self, language: str) -> None:
+        """Move this call to a monolingual stream without touching other calls."""
+        target = language if language == "ca" else settings.deepgram_language
+        if self._closed or target == self._stream_language:
+            return
+
+        replacement = await self._connect(target)
+        previous = self._socket
+        self._socket = replacement
+        self._stream_language = target
+        if target == "ca":
+            self._language = "ca"
+        self._reader = asyncio.create_task(self._read(replacement))
+        if previous is not None:
+            try:
+                await previous.close()
+            except Exception:
+                pass
+        if self.on_notice is not None:
+            await self.on_notice("stt_language_switch", {"language": target})
 
     async def push(self, ulaw_frame: bytes) -> None:
         if self._socket is None or self._closed:
@@ -117,10 +142,9 @@ class DeepgramTranscriber:
             except Exception:
                 pass
 
-    async def _read(self) -> None:
-        assert self._socket is not None
+    async def _read(self, socket) -> None:
         try:
-            async for raw in self._socket:
+            async for raw in socket:
                 try:
                     message = json.loads(raw)
                 except (ValueError, TypeError):
@@ -129,6 +153,8 @@ class DeepgramTranscriber:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if socket is not self._socket:
+                return
             # Dying quietly here would leave the agent deaf for the rest of the
             # call with nothing to show why.
             log.exception("deepgram reader stopped: %s: %s", type(exc).__name__, exc)
