@@ -42,8 +42,10 @@ class Config:
     quiver_base_url: str = field(default_factory=lambda: os.getenv("QUIVER_BASE_URL", "https://api.quiver.ai").rstrip("/"))
     quiver_model: str = field(default_factory=lambda: os.getenv("QUIVER_MODEL", ""))
     release_approved: bool = field(default_factory=lambda: os.getenv("V2_RELEASE_APPROVED", "false").lower() == "true")
-    default_language: str = field(default_factory=lambda: os.getenv("V2_DEFAULT_LANGUAGE", "es"))
+    default_language: str = field(default_factory=lambda: os.getenv("V2_DEFAULT_LANGUAGE", "en"))
     max_voice_calls: int = field(default_factory=lambda: int(os.getenv("V2_MAX_VOICE_CALLS", "4")))
+    # End-of-turn from the bundled Smart Turn model instead of a fixed pause; a mid-sentence pause is not a turn.
+    smart_turn: bool = field(default_factory=lambda: os.getenv("V2_SMART_TURN", "true").lower() == "true")
     max_text_sessions: int = 20
     text_session_ttl_s: int = 900
     ticket_ttl_s: int = 30

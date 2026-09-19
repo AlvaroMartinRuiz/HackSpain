@@ -131,7 +131,9 @@ class OperatorAPITests(unittest.TestCase):
     def test_public_carrier_accepts_headerless_calls_without_unlocking_tools_or_actions(self):
         config = replace(self.config, public_carrier_calls=True, operator_token="")
         seen = []
-        async def voice(socket, stream_sid, controller, config):
+        async def voice(socket, stream_sid, controller, config, on_ready=None, **_):
+            if on_ready:
+                await on_ready()
             seen.append((controller.state.mode, controller.state.call_id))
             await socket.send_json({"event": "probe", "mode": controller.state.mode})
         with patch("v2.voice.run_voice", side_effect=voice), TestClient(create_app(config)) as client:
@@ -187,7 +189,9 @@ class OperatorAPITests(unittest.TestCase):
         config = replace(self.config, public_browser_calls=True, api_key="clinic-test", mode="live",
                          allow_submissions=True, release_approved=True)
         submitted = AsyncMock()
-        async def voice(socket, stream_sid, controller, config):
+        async def voice(socket, stream_sid, controller, config, on_ready=None, **_):
+            if on_ready:
+                await on_ready()
             self.assertEqual(controller.state.mode, "practice")
             intent = Intent(intent_id="request", action="no_action", subject="synthetic caller")
             controller.state.intents[intent.intent_id] = intent
@@ -243,7 +247,9 @@ class OperatorAPITests(unittest.TestCase):
 
     def test_public_calls_have_separate_concurrency_and_bounded_rate_state(self):
         config = replace(self.config, public_browser_calls=True, api_key="clinic-test")
-        async def voice(socket, stream_sid, controller, config):
+        async def voice(socket, stream_sid, controller, config, on_ready=None, **_):
+            if on_ready:
+                await on_ready()
             await socket.receive_json()
         with patch("v2.voice.run_voice", side_effect=voice), TestClient(create_app(config)) as client:
             response = client.post("/api/public/voice/ticket", headers=self.origin, json={})
@@ -295,7 +301,9 @@ class OperatorAPITests(unittest.TestCase):
     def test_approved_carrier_sink_cannot_leak_into_browser_rehearsal(self):
         config = replace(self.config, mode="live", allow_submissions=True, release_approved=True, api_key="clinic-test")
         submitted = AsyncMock(return_value=SubmitResult("no_action", {}, 200, {}, 1))
-        async def voice(socket, stream_sid, controller, config):
+        async def voice(socket, stream_sid, controller, config, on_ready=None, **_):
+            if on_ready:
+                await on_ready()
             intent = Intent(intent_id="request", action="no_action", subject="synthetic caller")
             controller.state.intents[intent.intent_id] = intent
             receipt = await controller.dispatcher.execute(controller.state, intent, "no_action", {"reason": "out_of_scope"})
@@ -336,7 +344,9 @@ class OperatorAPITests(unittest.TestCase):
 
     def test_browser_ticket_is_single_use_and_binds_call_identity(self):
         seen = []
-        async def voice(socket, stream_sid, controller, config):
+        async def voice(socket, stream_sid, controller, config, on_ready=None, **_):
+            if on_ready:
+                await on_ready()
             seen.append((stream_sid, controller.state.call_id, controller.state.mode, controller.state.language))
             await socket.receive_text()
         with patch("v2.voice.run_voice", side_effect=voice), TestClient(create_app(self.config)) as client:
@@ -355,6 +365,20 @@ class OperatorAPITests(unittest.TestCase):
                     pass
             response = client.get("/api/runs/" + ready["run_id"], headers=self.headers)
             self.assertEqual(response.status_code, 200)
+
+    def test_browser_ready_waits_for_the_voice_pipeline(self):
+        async def voice(socket, stream_sid, controller, config, on_ready=None, **_):
+            await socket.send_json({"event": "pipeline_started"})
+            await on_ready()
+            await socket.receive_text()
+        with patch("v2.voice.run_voice", side_effect=voice), TestClient(create_app(self.config)) as client:
+            ticket = self.ticket(client)
+            with client.websocket_connect("/ws/browser", subprotocols=["v2-voice", "ticket." + ticket["ticket"]],
+                                          headers=self.origin) as socket:
+                socket.send_json(self.handshake(ticket))
+                self.assertEqual(socket.receive_json()["event"], "pipeline_started")
+                self.assertEqual(socket.receive_json()["event"], "ready")
+                socket.send_json({"event": "stop"})
 
     def test_expired_ticket_and_foreign_websocket_origin_are_rejected(self):
         with TestClient(create_app(self.config)) as client:
@@ -384,7 +408,9 @@ class OperatorAPITests(unittest.TestCase):
                     pass
 
     def test_completed_voice_status_survives_controller_cleanup(self):
-        async def voice(socket, stream_sid, controller, config):
+        async def voice(socket, stream_sid, controller, config, on_ready=None, **_):
+            if on_ready:
+                await on_ready()
             controller.state.intents["done"] = Intent(intent_id="done", action="cancel", subject="Fixture",
                                                        status="completed")
             controller.store.event(controller.state.run_id, "completion_close", {"epoch": controller.epoch})

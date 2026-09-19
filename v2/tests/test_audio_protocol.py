@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -102,6 +103,27 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                 await wrapped.receive()
             self.assertEqual(tape.frames["inbound"], 2)
             self.assertEqual(tape.protocol_errors, 1)
+
+    async def test_audio_queued_during_setup_is_accepted_once(self):
+        with tempfile.TemporaryDirectory() as root:
+            tape = RunTape(Path(root), "setup-backlog")
+            socket = SimpleNamespace(receive=AsyncMock(return_value={"type": "websocket.receive", "text": media(b"\xff" * 1600)}))
+            wrapped = RecordedSocket(socket, tape, accepted_at=time.monotonic() - 3)
+            for _ in range(25):  # 5 s: the 3 s that queued during setup plus the 2 s burst
+                await wrapped.receive()
+            with self.assertRaises(MediaProtocolError):
+                await wrapped.receive()
+            self.assertEqual(tape.frames["inbound"], 25)
+
+    async def test_audio_queued_while_providers_connect_is_accepted_once(self):
+        with tempfile.TemporaryDirectory() as root:
+            tape = RunTape(Path(root), "provider-startup")
+            socket = SimpleNamespace(receive=AsyncMock(return_value={"type": "websocket.receive", "text": media(b"\xff" * 1600)}))
+            wrapped = RecordedSocket(socket, tape, accepted_at=time.monotonic())
+            await asyncio.sleep(0.6)  # the pipeline is still starting; nothing reads the socket
+            for _ in range(12):  # 2.4 s: the 0.6 s that queued plus most of the 2 s burst
+                await wrapped.receive()
+            self.assertEqual(tape.protocol_errors, 0)
 
     def test_mark_names_are_bounded_and_not_arbitrary_objects(self):
         for name in (None, {}, "x" * 129):

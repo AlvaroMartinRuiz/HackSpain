@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import importlib
 import json
 import re
 import secrets
@@ -113,6 +114,8 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
         app.state.public_ticket_times = {}
         app.state.operator_request_times = {}
         app.state.carrier_connect_times = {}
+        # Importing the voice stack takes ~2 s; paid here, not while a caller's audio queues up.
+        await asyncio.to_thread(importlib.import_module, "v2.voice")
         expiry = asyncio.create_task(expire_sessions())
         try:
             yield
@@ -392,6 +395,7 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
             return
         async with app.state.voice_slot:
             await socket.accept(subprotocol="v2-voice" if ticket else None)
+            accepted_at = time.monotonic()
             controller = interpreter = clinic = None
             status = "disconnected"
             try:
@@ -402,10 +406,13 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
                 state = controller.state
                 app.state.voice_active.add(state.run_id)
                 app.state.store.event(state.run_id, "call_started", {"status": "active", "transport": transport})
+                on_ready = None
                 if ticket:
-                    await socket.send_json({"event": "ready", "run_id": state.run_id})
+                    # The browser starts streaming on "ready", so it is sent once the pipeline reads audio.
+                    async def on_ready(run_id=state.run_id):
+                        await socket.send_json({"event": "ready", "run_id": run_id})
                 from v2.voice import run_voice
-                await run_voice(socket, stream_sid, controller, config)
+                await run_voice(socket, stream_sid, controller, config, on_ready=on_ready, accepted_at=accepted_at)
                 events = app.state.store.report(state.run_id)["events"]
                 terminal = next((event["kind"] for event in reversed(events)
                                  if event["kind"] in {"completion_close", "deadline", "pipeline_error", "protocol_error"}), None)

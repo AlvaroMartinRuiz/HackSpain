@@ -4,7 +4,7 @@ import asyncio
 import base64
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import numpy as np
 import soxr
@@ -28,8 +28,10 @@ from pipecat.services.elevenlabs.tts import ElevenLabsHttpTTSService
 from pipecat.services.elevenlabs.tts_base import ELEVENLABS_MODEL_LANGUAGES
 from pipecat.transcriptions.language import Language
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.turns.user_start.min_words_user_turn_start_strategy import MinWordsUserTurnStartStrategy
 from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import SpeechTimeoutUserTurnStopStrategy
+from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 from starlette.websockets import WebSocketState
@@ -37,6 +39,8 @@ from starlette.websockets import WebSocketState
 from v2.codecs import pcm16_to_ulaw
 from v2.audio import MediaProtocolError, RecordedSocket, RunTape, parse_message
 from v2.config import Config
+from v2.domain_rules import written_dates
+from v2.language import decide_language
 from v2.models import Reply
 from v2.workflow import CallController, TEXT
 
@@ -210,6 +214,7 @@ class GraphProcessor(FrameProcessor):
             messages = frame.context.get_messages()
             text = next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")
             if isinstance(text, str) and text.strip() and not self.ending:
+                text = written_dates(text, decide_language(text, None, self.controller.state.language).code)
                 if not self.turn_started:
                     self.invalidate("caller_input")
                 self.turn_started = self.user_speaking = False
@@ -347,6 +352,9 @@ class GraphProcessor(FrameProcessor):
         await super().cleanup()
 
 
+FRAME_S = 0.02
+
+
 class PacedAudioOutput(FrameProcessor):
     def __init__(self, socket: RecordedSocket, stream_sid: str, graph: GraphProcessor, *, tail_s: float = 0.1):
         super().__init__()
@@ -388,14 +396,20 @@ class PacedAudioOutput(FrameProcessor):
         while len(self._buffer) >= 320 and self.graph.accepts(tag):
             packet = bytes(self._buffer[:320])
             del self._buffer[:320]
-            await asyncio.sleep(max(0, self._next_send - time.monotonic()))
+            now = time.perf_counter()
+            # A stalled provider must not turn into a burst when audio resumes.
+            if self._next_send < now - FRAME_S:
+                self._next_send = now
+            await asyncio.sleep(max(0, self._next_send - now))
             if not self.graph.accepts(tag):
                 return
             payload = pcm16_to_ulaw(packet)
             sent = await self._send({"event": "media", "media": {"payload": base64.b64encode(payload).decode("ascii")}}, tag)
             if not sent or not self.graph.accepts(tag):
                 return
-            self._next_send = time.monotonic() + 0.02
+            # Advance the schedule, not the clock: on Windows the loop wakes in 15.6 ms steps,
+            # and re-basing on each wake-up played audio at ~0.7x real time.
+            self._next_send += FRAME_S
             self._signal = self._signal or bool(payload.translate(None, b"\xff\x7f"))
             if not self._speaking:
                 self._speaking = True
@@ -445,7 +459,7 @@ class PacedAudioOutput(FrameProcessor):
                 if self._resampler is not None:
                     self._buffer.extend(self._resampler.resample_chunk(np.empty(0, dtype="int16"), last=True).astype("<i2").tobytes())
                 await self._drain(tag, final=True)
-                await asyncio.sleep(max(0, self._next_send - time.monotonic()) + self.tail_s)
+                await asyncio.sleep(max(0, self._next_send - time.perf_counter()) + self.tail_s)
                 if not self.graph.accepts(tag):
                     return
                 sent = await self._send({"event": "mark", "mark": {"name": "v2-" + tag["response_id"]}}, tag)
@@ -474,6 +488,8 @@ def voice_services(config: Config, http_session):
     if "ca" not in ELEVENLABS_MODEL_LANGUAGES.get(ca_model, ()):
         raise ValueError("Catalan requires an ElevenLabs model with explicit ca support")
     stt = DeepgramSTTService(api_key=config.deepgram_key, sample_rate=16000, mip_opt_out=True,
+                             # Without smart_format Spanish years come out as "1000 62"; its numeric dates are
+                             # made unambiguous before interpretation (see written_dates).
                              settings=DeepgramSTTService.Settings(model="nova-3", language="multi",
                                                                   numerals=True, smart_format=True))
     voices = {
@@ -491,21 +507,24 @@ def voice_services(config: Config, http_session):
 
 
 def user_aggregators(config, *, vad_analyzer):
+    if getattr(config, "smart_turn", False):
+        # One analyzer per call: it buffers this caller's audio.
+        stop = TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())
+    else:
+        stop = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=getattr(config, "user_speech_timeout_s", 0.6))
     return LLMContextAggregatorPair(LLMContext(), user_params=LLMUserAggregatorParams(
         vad_analyzer=vad_analyzer,
-        user_turn_strategies=UserTurnStrategies(
-            start=[MinWordsUserTurnStartStrategy(min_words=1)],
-            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=getattr(config, "user_speech_timeout_s", 0.6))],
-        ),
+        user_turn_strategies=UserTurnStrategies(start=[MinWordsUserTurnStartStrategy(min_words=1)], stop=[stop]),
     ))
 
 
-async def run_voice(socket, stream_sid: str, controller: CallController, config: Config):
+async def run_voice(socket, stream_sid: str, controller: CallController, config: Config, *,
+                    on_ready: Callable[[], Awaitable[None]] | None = None, accepted_at: float | None = None):
     import aiohttp
 
     tape = RunTape(config.data_dir, controller.state.run_id)
     wrapped = RecordedSocket(socket, tape, stream_sid=stream_sid,
-                             send_timeout_s=getattr(config, "voice_send_timeout_s", 5))
+                             send_timeout_s=getattr(config, "voice_send_timeout_s", 5), accepted_at=accepted_at)
     runner = None
     graph = None
     try:
@@ -538,6 +557,8 @@ async def run_voice(socket, stream_sid: str, controller: CallController, config:
 
             @worker.event_handler("on_pipeline_started")
             async def started(_worker, _frame):
+                if on_ready is not None:
+                    await on_ready()
                 if controller.state.turn or controller.pending_reply is not None:
                     return
                 greeting = Reply(text=TEXT[controller.state.language]["hello"], language=controller.state.language,

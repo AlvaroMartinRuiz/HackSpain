@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -66,6 +67,20 @@ class PresentationTests(unittest.IsolatedAsyncioTestCase):
     async def audio(self, reply, samples=160):
         frame = TTSAudioRawFrame(audio=b"\x10\x10" * samples, sample_rate=8000, num_channels=1)
         await self.output.process_frame(tagged(frame, reply), DOWN)
+
+    async def test_audio_is_paced_at_real_time_on_a_coarse_clock(self):
+        stamps = []
+        async def send(text):
+            if json.loads(text).get("event") == "media":
+                stamps.append(time.perf_counter())
+        self.socket.socket = SimpleNamespace(send_text=send)
+        reply = await self.start_reply()
+        await self.audio(reply, samples=8000)
+        self.assertEqual(len(stamps), 50)
+        elapsed = stamps[-1] - stamps[0]
+        # Never meaningfully ahead of real time (barge-in), and not starving the caller either.
+        self.assertTrue(all(t - stamps[0] >= k * 0.02 - 0.02 for k, t in enumerate(stamps)))
+        self.assertLess(elapsed, 49 * 0.02 * 1.15)
 
     async def test_first_synthesized_sentence_does_not_present_full_offer(self):
         reply = await self.start_reply()
