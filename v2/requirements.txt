@@ -1,0 +1,11 @@
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+httpx==0.28.1
+python-dotenv==1.2.3
+websockets==15.0.1
+pydantic==2.13.5
+tzdata==2026.4
+langgraph==1.2.11
+langgraph-sdk==0.4.2
+pipecat-ai[deepgram]==1.9.0
+deepgram-sdk==6.1.1

@@ -25,4 +25,12 @@ server.err
 server.pid
 ngrok.out
 ngrok.err
+.venv-v2/
+v2/.data/
+v2/.env
+node_modules/
+services/jev/.vercel/
+services/jev/.env
+.env.*
+!.env.example
 

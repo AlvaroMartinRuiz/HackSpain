@@ -1,0 +1,11 @@
+**
+!src/
+!src/**
+!data/
+!data/catalog.json
+!v2/
+!v2/**
+v2/.env
+v2/.data/
+**/__pycache__/
+**/*.pyc

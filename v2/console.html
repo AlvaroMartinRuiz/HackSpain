@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Socket Wizard v2 laboratory</title>
+<style>
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101622; color: #edf2fa; }
+body { max-width: 1000px; margin: 40px auto; padding: 0 24px; }
+h1 { font-size: 30px; } p { color: #b8c5d9; line-height: 1.6; }
+section { padding: 20px; border: 1px solid #334158; border-radius: 12px; margin: 20px 0; }
+input, button { font: inherit; padding: 10px; border-radius: 6px; border: 1px solid #526584; }
+input { width: min(65%, 450px); } button { cursor: pointer; background: #83c9e8; color: #142333; }
+button:disabled { opacity: .5; cursor: wait; } pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+#transcript article { padding: 12px; border-bottom: 1px solid #334158; }
+#transcript strong { display: block; color: #83c9e8; }
+</style>
+</head>
+<body>
+<h1>Socket Wizard v2 laboratory</h1>
+<p>Pipecat audio, LangGraph intent ledger, typed actions, and Jev assessment adapter. This deployment is isolated from the current receptionist. Live cutover is disabled.</p>
+<section><h2>Readiness</h2><pre id="health">Loading…</pre></section>
+<section>
+<h2>Run the offline two-intent demo</h2>
+<p>This uses synthetic fixtures, not an LLM caller. It consumes no API credits and never submits to Prosper. Enter the local operator token; it stays in this page's memory.</p>
+<input id="token" type="password" autocomplete="off" placeholder="V2 operator token">
+<select id="language" aria-label="Fixture language"><option value="es">Español</option><option value="en">English</option><option value="ca">Català</option></select>
+<button id="run">Run fixture</button>
+<p id="status" role="status"></p>
+<div id="transcript"></div>
+</section>
+<section><h2>Measurements</h2><pre id="metrics">No run yet.</pre></section>
+<section><h2>Reserved API budget</h2><pre id="budget">Authenticate to view. Reservations are conservative allowances, not provider invoices.</pre></section>
+<details><summary>Full versioned event trace</summary><pre id="trace"></pre></details>
+<script type="module">
+const el = (id) => document.getElementById(id);
+const pretty = (value) => JSON.stringify(value, null, 2);
+try {
+  el('health').textContent = pretty(await (await fetch('/health')).json());
+} catch {
+  el('health').textContent = 'Backend unavailable';
+}
+el('run').addEventListener('click', async () => {
+  el('run').disabled = true;
+  el('status').textContent = 'Running synthetic fixture…';
+  const headers = { 'X-V2-Token': el('token').value, 'Content-Type': 'application/json' };
+  try {
+    const input = await fetch(`/api/demo?language=${encodeURIComponent(el('language').value)}`, { headers });
+    if (!input.ok) throw new Error(`Access failed: HTTP ${input.status}`);
+    const response = await fetch('/api/rehearse', { method: 'POST', headers, body: JSON.stringify(await input.json()) });
+    if (!response.ok) throw new Error(`Rehearsal failed: HTTP ${response.status}`);
+    const run = await response.json();
+    el('status').textContent = `Run ${run.run_id}. Official score: unknown.`;
+    el('metrics').textContent = pretty(run.metrics);
+    el('trace').textContent = pretty(run);
+    el('transcript').replaceChildren();
+    for (const event of run.events) {
+      if (!['caller_turn', 'response_planned'].includes(event.kind)) continue;
+      const row = document.createElement('article');
+      const who = document.createElement('strong');
+      who.textContent = event.kind === 'caller_turn' ? 'Caller' : 'Agent (text simulation)';
+      const text = document.createElement('span');
+      text.textContent = event.payload.text;
+      row.append(who, text);
+      el('transcript').append(row);
+    }
+    const budget = await fetch('/api/budget', { headers });
+    if (budget.ok) el('budget').textContent = pretty(await budget.json());
+  } catch (error) {
+    el('status').textContent = error.message;
+  } finally {
+    el('run').disabled = false;
+  }
+});
+</script>
+</body>
+</html>
