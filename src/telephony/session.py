@@ -26,12 +26,14 @@ from src.voice import audio, tts
 from src.voice.language import decide_language, should_apply_language
 from src.voice.stt import build_transcriber, keyterms_for
 from src.voice.tts import Synthesizer, build_synthesizer
+from src.voice.turns import TurnGate
 
 Sender = Callable[[dict[str, Any]], Awaitable[None]]
 Closer = Callable[[], Awaitable[None]]
 
-# Deepgram's Nova-3 barge-in guidance: two words on an interim result, one
-# word on a final. A 7-character TV fragment still looks like speech.
+# Deepgram's Nova-3 barge-in guidance: two words on an interim result. We stop
+# ourselves when they talk; we never start a turn until Pipecat Smart Turn
+# says they have finished.
 MIN_BARGE_IN_WORDS = 2
 MIN_SPEAKING_MS_BEFORE_BARGE_IN = 350
 ECHO_OVERLAP = 0.75
@@ -94,6 +96,12 @@ class CallSession:
             on_notice=self._on_stt_notice,
             keyterms=keyterms_for(catalog),
         )
+        self._turn_gate = None if text_mode else TurnGate()
+        self._turn_parts: list[str] = []
+        self._last_turn_decide_at = 0.0
+        self._last_part_at = 0.0
+        self._turn_deadline_task: Optional[asyncio.Task] = None
+        self._last_committed = ""
 
         self.seen_patients: list[dict[str, Any]] = []
         self.submissions: list[SubmitResult] = []
@@ -189,10 +197,20 @@ class CallSession:
                 "track": track, "frame_bytes": len(chunk),
             })
         await self.transcriber.push(chunk)
+        if (
+            key == "inbound"
+            and self._turn_gate is not None
+            and self._turn_gate.enabled
+        ):
+            event = await self._turn_gate.feed_ulaw(chunk)
+            await self._on_turn_event(event)
 
     async def _on_stt_notice(self, kind: str, payload: dict[str, Any]) -> None:
         await self.record(kind, payload)
         if kind == "stt_utterance_end":
+            if self._turn_gate is not None and self._turn_gate.enabled:
+                await self._maybe_close_turn("utterance_end")
+                return
             self._caller_speaking = False
             if (
                 self._waiting_since is None
@@ -202,6 +220,8 @@ class CallSession:
                 self._waiting_since = time.monotonic()
             return
         if kind != "stt_low_confidence" or self._closed or self._closing:
+            return
+        if self._turn_parts:
             return
         self._caller_speaking = False
         now = time.monotonic()
@@ -270,6 +290,7 @@ class CallSession:
             return
         self._closing = True
         self._disarm_silence()
+        self._disarm_turn_deadline()
 
         await self._recover_last_turn()
         self._closed = True
@@ -318,6 +339,8 @@ class CallSession:
         except (asyncio.TimeoutError, Exception):
             # Anything still outstanding is not worth the submission window.
             pass
+        if self._turn_parts:
+            await self._commit_turn()
 
     async def _drain_and_settle(self) -> None:
         assert self.transcriber is not None
@@ -509,6 +532,7 @@ class CallSession:
         """Start listening for silence, if the agent has nothing more to say."""
         if (self.text_mode or self._closing or self._sealing or self.is_speaking
                 or self._turn_lock.locked()
+                or self._turn_parts
                 or self._silence_prompts >= settings.silence_prompt_max):
             return
         self._disarm_silence()
@@ -535,6 +559,7 @@ class CallSession:
         if (
             self.is_speaking
             or self._caller_speaking
+            or self._turn_parts
             or self._turn_lock.locked()
             or self._closing
             or self._sealing
@@ -612,15 +637,8 @@ class CallSession:
         return overlap >= ECHO_OVERLAP
 
     def _worthy_barge_in(self, text: str, *, final: bool) -> bool:
-        """Stop ourselves when the caller talks over us; never on a cough.
-
-        Interims need two words. A final "Hello?" may interrupt the greeting,
-        but a one-word fragment mid-sentence is not enough to cut them off by
-        starting our next turn early — that path is `_on_final`, which waits
-        until STT commits.
-        """
-        words = _words(text)
-        return bool(words) if final else len(words) >= MIN_BARGE_IN_WORDS
+        """Stop ourselves when the caller talks over us; never on a cough."""
+        return len(_words(text)) >= MIN_BARGE_IN_WORDS
 
     @property
     def is_speaking(self) -> bool:
@@ -679,7 +697,9 @@ class CallSession:
         text = (text or "").strip()
         if not text:
             return
-        self._caller_speaking = False
+        gate = self._turn_gate is not None and self._turn_gate.enabled
+        if not gate:
+            self._caller_speaking = False
         self._waiting_since = None
         self._silence_prompts = 0
         if self._looks_like_echo(text):
@@ -738,10 +758,109 @@ class CallSession:
         if self._closed:
             return
 
+        if not self._turn_parts or self._turn_parts[-1] != text:
+            self._turn_parts.append(text)
+        self._last_part_at = time.monotonic()
+        self._disarm_turn_deadline()
+
+        if gate and self._turn_gate is not None and not self._turn_gate.turn_over:
+            # A noisy "Hello?" is not a turn. Wait until Smart Turn says they
+            # have finished, then handle the whole request as one.
+            self._arm_turn_deadline()
+            return
+
+        await self._commit_turn()
+
+    async def _on_turn_event(self, event: str) -> None:
+        if event == "start":
+            self._caller_speaking = True
+            self._disarm_silence()
+            self._silence_prompts = 0
+            return
+        if event == "pause":
+            await self._maybe_close_turn("vad_pause")
+            return
+        if event == "complete":
+            self._caller_speaking = False
+            await self._commit_turn()
+
+    async def _maybe_close_turn(self, reason: str) -> None:
+        if self._turn_gate is None or not self._turn_gate.enabled:
+            return
+        if self._turn_gate.turn_over:
+            await self._commit_turn()
+            return
+        now = time.monotonic()
+        if now - self._last_turn_decide_at < 0.3:
+            return
+        self._last_turn_decide_at = now
+        complete = await self._turn_gate.decide()
+        if self._turn_parts:
+            await self.record("turn_decision", {
+                "reason": reason,
+                "complete": complete,
+                "probability": self._turn_gate.last_probability,
+                "parts": len(self._turn_parts),
+            })
+        if complete:
+            self._caller_speaking = False
+            await self._commit_turn()
+            return
+        self._arm_turn_deadline()
+
+    def _arm_turn_deadline(self) -> None:
+        """If the model stays incomplete, still answer — never sit on their words."""
+        self._disarm_turn_deadline()
+        wait_s = max(3.0, settings.smart_turn_stop_secs + 1.8)
+        self._turn_deadline_task = asyncio.create_task(
+            self._turn_deadline(wait_s), name=f"turn-deadline:{self.call_id}"
+        )
+
+    def _disarm_turn_deadline(self) -> None:
+        task = self._turn_deadline_task
+        self._turn_deadline_task = None
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+
+    async def _turn_deadline(self, wait_s: float) -> None:
+        try:
+            await asyncio.sleep(wait_s)
+        except asyncio.CancelledError:
+            return
+        if not self._turn_parts or self._closed or self._closing:
+            return
+        await self.record("turn_decision", {
+            "reason": "deadline",
+            "complete": True,
+            "parts": len(self._turn_parts),
+        })
+        self._caller_speaking = False
+        await self._commit_turn()
+
+    async def _commit_turn(self) -> None:
+        """Give the LLM one joined caller turn, never a fragment."""
+        if not self._turn_parts:
+            return
+        self._disarm_turn_deadline()
+        text = " ".join(part for part in self._turn_parts if part).strip()
+        self._turn_parts = []
+        if self._turn_gate is not None:
+            self._turn_gate.reset()
+        if not text or self._closed:
+            return
+        if (
+            text == self._last_committed
+            or (self._last_committed and text in self._last_committed)
+        ):
+            return
+        self._last_committed = text
+
         if self._turn_lock.locked():
             # The caller added something while we were still working: keep the
             # newest, because the last thing they asked for is the request.
-            self._pending_turn = text
+            self._pending_turn = (
+                f"{self._pending_turn} {text}".strip() if self._pending_turn else text
+            )
             return
 
         self._caller_is_talking()
@@ -752,7 +871,6 @@ class CallSession:
                 await self.agent.handle(current)
                 if self._pending_turn:
                     pending, self._pending_turn = self._pending_turn, None
-        # A turn that ended without new speech leaves nothing to re-arm on.
         self._arm_silence()
 
     # ---- shared hooks --------------------------------------------------

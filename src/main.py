@@ -21,6 +21,7 @@ from src.obs.store import store
 from src.platform_api.client import PlatformClient
 from src.telephony import twilio_ws
 from src.voice import tts
+from src.voice import turns
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,21 +64,36 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     missing = settings.missing_voice_keys()
     logger.info(
-        "ready on :%s%s — stt=%s llm=%s tts=%s",
+        "ready on :%s%s — stt=%s llm=%s tts=%s smart-turn=%s",
         settings.port, "/ws",
         settings.stt_active,
         settings.llm_model if settings.llm_api_key else "NONE",
         settings.tts_provider,
+        turns.status(),
     )
     if missing:
         logger.warning("voice pipeline incomplete, missing: %s", ", ".join(missing))
 
     warming = asyncio.create_task(_warm_voice_cache(), name="tts-cache")
+    turning = asyncio.create_task(_warm_smart_turn(), name="smart-turn")
     try:
         yield
     finally:
         warming.cancel()
+        turning.cancel()
         await llm.aclose()
+
+
+async def _warm_smart_turn() -> None:
+    if not settings.smart_turn:
+        return
+    try:
+        ok = await asyncio.to_thread(turns.warm)
+        logger.info("smart-turn %s", "ready" if ok else turns.status())
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("smart-turn not warmed: %s", exc)
 
 
 async def _warm_voice_cache() -> None:
@@ -124,6 +140,7 @@ async def health() -> dict[str, Any]:
         "voice_ready": not settings.missing_voice_keys(),
         "missing_keys": settings.missing_voice_keys(),
         "live_calls": len(store.live_calls()),
+        "smart_turn": turns.status(),
     }
 
 

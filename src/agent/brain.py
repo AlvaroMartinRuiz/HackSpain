@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 import unicodedata
@@ -21,6 +22,9 @@ ABBREVIATION_END = re.compile(r"\b(?:dr|dra|sr|sra|mr|mrs|ms)\.$", re.IGNORECASE
 SOFT_BREAK = re.compile(r"(?<=[,;:])\s+")
 MAX_HISTORY_MESSAGES = 26
 SOFT_FLUSH_CHARS = 130
+# If the model has not spoken yet, fill the line so the harness does not
+# hang up for "no audible audio". HOLD is cached, so it is cheap.
+HOLD_IF_QUIET_S = 1.8
 # Hold only a filler opener ("Thank you.") so it rides with the next sentence.
 # A real short line ("¿Hablo con Ella Smith?") must not wait for the LLM to finish.
 _FILLER_OPENER = re.compile(
@@ -66,47 +70,61 @@ class Agent:
             return
 
         spoke = False
-        for round_index in range(settings.llm_max_tool_rounds):
-            try:
-                completion = await self._run_round()
-            except LLMError as exc:
-                await self.session.record("error", {"where": "llm", "detail": str(exc)})
-                await self.session.say(phrases.pick(phrases.MODEL_DOWN, self.session.language))
-                return
+        filler = asyncio.create_task(self._hold_if_quiet(), name="hold-if-quiet")
+        try:
+            for round_index in range(settings.llm_max_tool_rounds):
+                try:
+                    completion = await self._run_round()
+                except LLMError as exc:
+                    await self.session.record("error", {"where": "llm", "detail": str(exc)})
+                    await self.session.say(phrases.pick(phrases.MODEL_DOWN, self.session.language))
+                    return
 
-            spoke = spoke or bool(completion.text.strip())
+                spoke = spoke or bool(completion.text.strip())
 
-            if not completion.wants_tools:
-                if completion.text.strip():
-                    self.messages.append({"role": "assistant", "content": completion.text})
-                break
+                if not completion.wants_tools:
+                    if completion.text.strip():
+                        self.messages.append({"role": "assistant", "content": completion.text})
+                    break
 
-            self.messages.append({
-                "role": "assistant",
-                "content": completion.text or None,
-                "tool_calls": [call.as_message_call() for call in completion.tool_calls],
-            })
+                self.messages.append({
+                    "role": "assistant",
+                    "content": completion.text or None,
+                    "tool_calls": [call.as_message_call() for call in completion.tool_calls],
+                })
 
-            for call in completion.tool_calls:
-                await self._run_tool(call.id, call.name, call.parsed_arguments())
+                for call in completion.tool_calls:
+                    await self._run_tool(call.id, call.name, call.parsed_arguments())
 
-            for briefing in self._pending_briefings:
-                self.messages.append({"role": "system", "content": briefing})
-            self._pending_briefings.clear()
+                for briefing in self._pending_briefings:
+                    self.messages.append({"role": "system", "content": briefing})
+                self._pending_briefings.clear()
+
+                if not spoke:
+                    await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
+                    spoke = True
+
+                if round_index == settings.llm_max_tool_rounds - 1:
+                    await self.session.record("error", {
+                        "where": "tool_loop", "detail": "hit the tool round cap",
+                    })
 
             if not spoke:
                 await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
-                spoke = True
-
-            if round_index == settings.llm_max_tool_rounds - 1:
-                await self.session.record("error", {
-                    "where": "tool_loop", "detail": "hit the tool round cap",
-                })
-
-        if not spoke:
-            await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
+        finally:
+            filler.cancel()
 
         await self.session.note_response_latency(int((time.perf_counter() - started) * 1000))
+
+    async def _hold_if_quiet(self) -> None:
+        """Keep audible audio on the line while the model or tools are still working."""
+        try:
+            await asyncio.sleep(HOLD_IF_QUIET_S)
+        except asyncio.CancelledError:
+            return
+        if self.session.is_speaking or self.session.text_mode:
+            return
+        await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
 
     async def _run_round(self) -> Completion:
         """Stream one completion, speaking each sentence as it lands."""

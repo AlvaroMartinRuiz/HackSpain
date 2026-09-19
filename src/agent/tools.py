@@ -614,10 +614,14 @@ class ToolBox:
             own = self.patient.get("insurer")
             insurers = ([own] if own else []) + self.named_insurers
 
-        # A Catalan speaker is booked with a doctor who speaks Catalan, whether or
-        # not the model thinks to ask for one. Only Catalan: every doctor speaks
-        # Spanish, and not every doctor speaks English.
-        language = args.get("language") or ("ca" if self.session.language == "ca" else None)
+        # Named doctor: search that person, even if they do not speak the
+        # caller's language. Unnamed search: prefer Catalan-speaking doctors
+        # when the call is in Catalan and they have slots.
+        language = args.get("language")
+        if provider_id:
+            language = None
+        elif not language and self.session.language == "ca":
+            language = "ca"
 
         # The age boundary is the clinic's rule, not the caller's problem: asking
         # for "the doctor" for an eight-year-old is paediatrics, not a refusal.
@@ -688,9 +692,11 @@ class ToolBox:
             "blocked": search.blocked,
         })
 
+        mismatch = self._named_doctor_language_warning(provider_id)
+
         if not search.found:
             self.last_reason = search.reason
-            return {
+            payload = {
                 "options": [],
                 "reason": search.reason,
                 "blocked": search.blocked,
@@ -702,10 +708,18 @@ class ToolBox:
                     "insurance plan, asking is the only way to find out."
                 ),
             }
+            if mismatch:
+                payload["language_mismatch"] = {
+                    "doctor": mismatch["doctor"],
+                    "speaks": mismatch["speaks"],
+                    "caller_language": mismatch["caller_language"],
+                }
+                payload["guidance"] = mismatch["empty"]
+            return payload
 
         self.options = {index + 1: slot for index, slot in enumerate(search.slots)}
         self.options_for = self.patient.get("patient_id")
-        return {
+        payload = {
             # Echoed so a read-back names the right person out loud.
             "searched_for": {
                 "patient_id": self.patient.get("patient_id"),
@@ -748,6 +762,14 @@ class ToolBox:
                 + "Then call book_slot with the option number they choose."
             ),
         }
+        if mismatch:
+            payload["language_mismatch"] = {
+                "doctor": mismatch["doctor"],
+                "speaks": mismatch["speaks"],
+                "caller_language": mismatch["caller_language"],
+            }
+            payload["guidance"] = mismatch["found"] + " " + payload["guidance"]
+        return payload
 
     # ---- writes -------------------------------------------------------
 
@@ -1073,6 +1095,37 @@ class ToolBox:
             return None
         fields, problems = self.engine.plan_registration(self.last_register_fields)
         return fields if fields and not problems else None
+
+    def _named_doctor_language_warning(self, provider_id: Optional[str]) -> Optional[dict[str, Any]]:
+        """If they named a doctor who does not speak the caller's language, say so and wait."""
+        if not provider_id:
+            return None
+        spoken = (self.session.language or "")[:2]
+        if spoken not in {"ca", "en"}:
+            return None
+        provider = self.catalog.providers.get(provider_id)
+        if provider is None or provider.speaks(spoken):
+            return None
+        label = {"ca": "Catalan", "en": "English"}[spoken]
+        return {
+            "doctor": provider.name,
+            "speaks": list(provider.languages),
+            "caller_language": spoken,
+            "found": (
+                f"{provider.name} does not speak {label}. Tell the caller that once and ask "
+                "whether they still want this doctor or prefer someone who speaks it. "
+                "Wait for their answer. If they keep this doctor, offer the times below. "
+                "If they want someone who speaks it, call find_appointments again without "
+                "provider_id."
+            ),
+            "empty": (
+                f"{provider.name} does not speak {label}. Tell the caller that once and ask "
+                "whether they still want this doctor or prefer someone who speaks it. "
+                "Wait for their answer. They currently have no free slot with this doctor. "
+                "If they want someone who speaks {label}, call find_appointments again "
+                "without provider_id. Do not ask about insurance for the language mismatch."
+            ),
+        }
 
     def fallback_reason(self) -> str:
         """The reason to report if the call ends before the model closes it."""

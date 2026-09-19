@@ -164,6 +164,11 @@ class Settings:
         )
     )
     barge_in: bool = field(default_factory=lambda: _bool("BARGE_IN", True))
+    # Pipecat LocalSmartTurn v3: wait until the caller has actually finished.
+    smart_turn: bool = field(default_factory=lambda: _bool("SMART_TURN", True))
+    smart_turn_stop_secs: float = field(
+        default_factory=lambda: _float("SMART_TURN_STOP_SECS", 1.2)
+    )
     # Nearly every caller speaks English; a detected language replaces this.
     default_language: str = field(default_factory=lambda: _env("DEFAULT_LANGUAGE", default="en").lower())
     silence_prompt_s: float = field(default_factory=lambda: _float("SILENCE_PROMPT_S", 10.0))
