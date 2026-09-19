@@ -37,6 +37,13 @@ BIRTHDAYS = [f"{year}-{month:02d}-{day:02d}"
              for year in range(1950, 2020, 4)
              for month, day in ((3, 14), (8, 7))]
 
+# Only drawn on when the first sweep came up short of a plan we need. Three
+# scenarios depend on an Adeslas patient existing, and silently skipping them is
+# worse than a few more directory lookups.
+EXTRA_BIRTHDAYS = [f"{year}-{month:02d}-{day:02d}"
+                   for year in range(1948, 2020, 3)
+                   for month, day in ((1, 22), (5, 9), (11, 30))]
+
 
 @dataclass
 class Result:
@@ -298,9 +305,12 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
             if not result.check("exactly one CANCEL", len(cancels) == 1,
                                 str([s["action"] for s in response["submissions"]])):
                 return
+            # Any appointment on their diary is a fair reading of "my
+            # appointment"; what must never happen is an id from thin air.
+            known_ids = with_appointment["_appointment_ids"]
             result.check("the id came from the diary, not the caller",
-                         cancels[0]["payload"]["appointment_id"] == appointment["appointment_id"],
-                         f"{cancels[0]['payload']['appointment_id']} vs {appointment['appointment_id']}")
+                         cancels[0]["payload"]["appointment_id"] in known_ids,
+                         f"{cancels[0]['payload']['appointment_id']} not among {known_ids}")
             result.check("nothing was booked instead", not actions_of(response, "book"))
 
         scenarios.append(Scenario(
@@ -512,7 +522,10 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
         title="16 · The Questions — they book what you tell them, so the fact has to be right",
         from_number=f"+34{known['phone']}",
         turns=[
-            "Buenos días. Antes de pedir nada, ¿qué sedes tienen y cuáles abren los sábados?",
+            # Opening hours are deliberately not in the agent's briefing, so an
+            # honest answer has to come from clinic_facts rather than memory.
+            "Buenos días. Antes de pedir nada, ¿qué sedes abren los sábados y con "
+            "qué horario exactamente?",
             f"Soy {full_name(known)}, nací el {spoken_date(known['date_of_birth'])}.",
             "Perfecto. Pues deme cita con el médico de cabecera un sábado, en la sede que abra.",
             "Sí, esa me vale. Resérvemela.",
@@ -587,7 +600,7 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
     # where per-call state that is not re-scoped starts booking the wrong person.
     if with_appointment and people.get("second"):
         holder = with_appointment
-        holder_appointment = with_appointment["_appointment"]
+        holder_appointments = with_appointment["_appointment_ids"]
         other = people["second"]
 
         def verify_real_call(response: dict[str, Any], result: Result) -> None:
@@ -599,10 +612,9 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
                          str([s["action"] for s in response["submissions"]]))
             if reschedules:
                 moved = reschedules[0]["payload"]
-                result.check("the moved appointment is the one from the diary",
-                             moved["appointment_id"] == holder_appointment["appointment_id"],
-                             f"{moved['appointment_id']} vs "
-                             f"{holder_appointment['appointment_id']}")
+                result.check("the moved appointment came from that patient's diary",
+                             moved["appointment_id"] in holder_appointments,
+                             f"{moved['appointment_id']} not among {holder_appointments}")
                 result.check("moved to a real provider",
                              moved["provider_id"] in catalog.providers, moved["provider_id"])
             if books:
@@ -659,7 +671,7 @@ async def gather_people(client: PlatformClient) -> dict[str, dict[str, Any]]:
     pool: list[dict[str, Any]] = []
     now = now_madrid()
 
-    for birthday in BIRTHDAYS:
+    for birthday in BIRTHDAYS + EXTRA_BIRTHDAYS:
         pool.extend(await client.directory(date_of_birth=birthday))
         for match in pool:
             if "known" not in people and match.get("has_visited_before"):
@@ -674,18 +686,32 @@ async def gather_people(client: PlatformClient) -> dict[str, dict[str, Any]]:
 
     known = people.get("known")
     if known:
+        holder: Optional[dict[str, Any]] = None
         for candidate in [known] + pool:
             upcoming = await client.appointments(candidate["patient_id"], when="upcoming")
-            if upcoming:
-                people["with_appointment"] = {**candidate, "_appointment": upcoming[0]}
+            if not upcoming:
+                continue
+            entry = {
+                **candidate,
+                "_appointment": upcoming[0],
+                "_appointment_ids": [a["appointment_id"] for a in upcoming],
+            }
+            # "Cancel my appointment" only names one appointment when the
+            # patient has one; with several, any of them is a fair reading and
+            # the scenario would fail the agent for our own ambiguity.
+            if len(upcoming) == 1:
+                holder = entry
                 break
+            holder = holder or entry
+        if holder:
+            people["with_appointment"] = holder
 
     # A second, distinct patient, so a two-intent call has someone to book for
     # who is not the person whose appointment is being moved.
-    holder = people.get("with_appointment")
-    if holder:
+    booked = people.get("with_appointment")
+    if booked:
         for candidate in pool:
-            if candidate["patient_id"] == holder["patient_id"]:
+            if candidate["patient_id"] == booked["patient_id"]:
                 continue
             if candidate.get("has_visited_before") and candidate.get("insurer"):
                 people["second"] = candidate
