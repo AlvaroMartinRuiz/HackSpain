@@ -47,8 +47,8 @@ async def overview() -> dict[str, Any]:
             "public_console_url": settings.public_console_url or None,
         },
         "providers": {
-            "stt": settings.stt_provider if settings.deepgram_api_key else "whisper (fallback)",
-            "stt_model": settings.deepgram_model,
+            "stt": settings.stt_active,
+            "stt_model": settings.stt_model_label,
             "llm": f"{settings.llm_provider}:{settings.llm_model}" if settings.llm_api_key else "not configured",
             "tts": active_provider_name(),
         },

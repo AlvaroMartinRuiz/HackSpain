@@ -22,14 +22,16 @@ from src.obs import tape
 from src.platform_api.client import PlatformClient, SubmitResult
 from src.voice import audio
 from src.voice.language import decide_language
-from src.voice.stt import build_transcriber
+from src.voice.stt import build_transcriber, keyterms_for
 from src.voice.tts import Synthesizer, build_synthesizer
 
 Sender = Callable[[dict[str, Any]], Awaitable[None]]
 
-# A single word from a noisy line is not an interruption.
-MIN_BARGE_IN_CHARS = 7
+# Deepgram's Nova-3 barge-in guidance: two words on an interim result, one
+# word on a final. A 7-character TV fragment still looks like speech.
+MIN_BARGE_IN_WORDS = 2
 MIN_SPEAKING_MS_BEFORE_BARGE_IN = 350
+ECHO_OVERLAP = 0.75
 PLAYBACK_LEAD_S = 0.20
 # ~3 minutes of µ-law; the harness cuts the call before this anyway.
 TAPE_CAP_BYTES = 8000 * 180
@@ -76,6 +78,7 @@ class CallSession:
             on_final=self._on_final,
             on_speech_started=self._on_speech_started,
             on_notice=self._on_stt_notice,
+            keyterms=keyterms_for(catalog),
         )
 
         self.seen_patients: list[dict[str, Any]] = []
@@ -88,6 +91,7 @@ class CallSession:
         self._generation = 0
         self._speaking_since: Optional[float] = None
         self._current_text = ""
+        self._last_spoken = ""
         self._current_sent = 0
         self._current_total = 0
         self._synthesizing = 0
@@ -320,6 +324,7 @@ class CallSession:
         # Logged when decided rather than when finished playing, so the console
         # shows the turn as the caller starts hearing it.
         await self.record("agent_said", {"text": text, "greeting": first})
+        self._last_spoken = text
         if not self.text_mode:
             await self._say_queue.put((self._generation, text, self.language))
 
@@ -446,12 +451,29 @@ class CallSession:
         return " ".join(words[:keep])
 
     def _looks_like_echo(self, text: str) -> bool:
-        """Skip a transcript that is just our own voice coming back on the line."""
-        heard = text.lower().strip()
-        said = (self._current_text or "").lower().strip()
-        if len(heard) < 12 or not said:
+        """Skip a transcript that is just our own voice coming back on the line.
+
+        STT almost never returns the TTS word-for-word, so a substring check
+        misses most echo. Word overlap against what we just said catches the
+        noisy remainder without needing a second audio pass.
+        """
+        heard = _words(text)
+        if len(heard) < 2:
             return False
-        return heard in said or said in heard
+        said = _words(self._current_text) or _words(self._last_spoken)
+        if not said:
+            return False
+        heard_line = " ".join(heard)
+        said_line = " ".join(said)
+        if heard_line in said_line or said_line in heard_line:
+            return True
+        overlap = len(set(heard) & set(said)) / len(set(heard))
+        return overlap >= ECHO_OVERLAP
+
+    def _worthy_barge_in(self, text: str, *, final: bool) -> bool:
+        """Deepgram: two interim words, or one word on a final result."""
+        words = _words(text)
+        return bool(words) if final else len(words) >= MIN_BARGE_IN_WORDS
 
     @property
     def is_speaking(self) -> bool:
@@ -487,7 +509,7 @@ class CallSession:
         speaking_ms = (now - (self._speaking_since or now)) * 1000
         if speaking_ms < MIN_SPEAKING_MS_BEFORE_BARGE_IN:
             return
-        if len(text.strip()) < MIN_BARGE_IN_CHARS:
+        if not self._worthy_barge_in(text, final=False):
             return
         await self._interrupt(text.strip())
 
@@ -498,6 +520,8 @@ class CallSession:
         if self._looks_like_echo(text):
             await self.record("stt_echo", {"text": text})
             return
+        if settings.barge_in and self.is_speaking and self._worthy_barge_in(text, final=True):
+            await self._interrupt(text)
         decision = decide_language(text, language, self.language)
         changed = decision.code != self.language
         if changed or decision.confidence >= self.language_confidence:
@@ -597,3 +621,7 @@ def _drain(queue: asyncio.Queue) -> None:
             queue.get_nowait()
         except asyncio.QueueEmpty:
             break
+
+
+def _words(text: str) -> list[str]:
+    return [token for token in (text or "").lower().split() if token]

@@ -24,7 +24,7 @@ function renderOverview(overview) {
   el("clinic-name").textContent = overview.clinic || "Clínica Arenal";
   const p = overview.providers || {};
   const pills = [
-    `<span class="pill">escucha <b>${escapeHtml(p.stt)}</b></span>`,
+    `<span class="pill">escucha <b>${escapeHtml(p.stt)}</b>${p.stt_model ? ` · ${escapeHtml(p.stt_model)}` : ""}</span>`,
     `<span class="pill">modelo <b>${escapeHtml(p.llm)}</b></span>`,
     `<span class="pill">voz <b>${escapeHtml(p.tts)}</b></span>`,
     `<span class="pill">endpoint <b>${escapeHtml(

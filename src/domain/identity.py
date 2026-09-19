@@ -17,6 +17,14 @@ _SPOKEN_DIGITS = {
     "nueve": "9", "nine": "9",
 }
 
+# NIE prefixes as they are dictated. The check letter is derived, so only the
+# leading letter has to be identified as X, Y or Z.
+_SPOKEN_NIE_PREFIX = (
+    (r"^(i griega|ye)\b", "Y"),
+    (r"^(equis)\b", "X"),
+    (r"^(zeta|zeda)\b", "Z"),
+)
+
 _EMAIL_WORDS = [
     (r"\b(arroba|at sign|at)\b", "@"),
     (r"\b(punto|dot|period)\b", "."),
@@ -47,6 +55,10 @@ def normalize_provider_name(name: str) -> str:
 def normalize_phone(raw: str) -> str:
     """Fold to the nine national digits, the way the directory compares them."""
     digits = re.sub(r"\D", "", raw or "")
+    if len(digits) < 9:
+        spoken = spoken_to_digits(raw)
+        if len(spoken) > len(digits):
+            digits = spoken
     if digits.startswith("0034"):
         digits = digits[4:]
     elif digits.startswith("34") and len(digits) > 9:
@@ -83,7 +95,7 @@ def parse_national_id(raw: str) -> dict[str, object]:
     that was simply never said is not the same as a wrong letter: the digits
     still determine it, and `letter_missing` says so.
     """
-    cleaned = re.sub(r"[^0-9A-Za-z]", "", raw or "").upper()
+    cleaned = _clean_national_id(raw)
     result: dict[str, object] = {"input": raw, "cleaned": cleaned, "kind": None,
                                  "valid": False, "value": None, "expected_letter": None,
                                  "letter_missing": False}
@@ -110,6 +122,38 @@ def parse_national_id(raw: str) -> dict[str, object]:
         result.update(kind="DNI", expected_letter=expected, value=digits + expected,
                       valid=letter == expected, letter_missing=not letter)
     return result
+
+
+def _clean_national_id(raw: str) -> str:
+    """Alphanumeric form, falling back to digits and NIE prefixes as spoken."""
+    cleaned = re.sub(r"[^0-9A-Za-z]", "", raw or "").upper()
+    if _looks_like_id(cleaned):
+        return cleaned
+    spoken = _from_spoken_id(raw)
+    return spoken if _looks_like_id(spoken) else cleaned
+
+
+def _looks_like_id(cleaned: str) -> bool:
+    if len(cleaned) >= 8 and cleaned[0] in NIE_PREFIX and cleaned[1:8].isdigit():
+        return True
+    return len(cleaned) >= 8 and cleaned[:8].isdigit()
+
+
+def _from_spoken_id(raw: str) -> str:
+    text = normalize_text(raw)
+    prefix = ""
+    for pattern, letter in _SPOKEN_NIE_PREFIX:
+        if re.match(pattern, text):
+            prefix = letter
+            text = re.sub(pattern, "", text, count=1)
+            break
+    if not prefix and text[:1] in {"x", "y", "z"} and (len(text) == 1 or not text[1].isalpha()):
+        prefix = text[0].upper()
+        text = text[1:]
+    digits = spoken_to_digits(text)
+    if not digits:
+        return ""
+    return prefix + digits if prefix else digits
 
 
 def split_id_and_phone(national_id: str, phone: str) -> tuple[str, str]:

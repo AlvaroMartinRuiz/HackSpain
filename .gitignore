@@ -15,9 +15,14 @@ build/
 # Call history is per-machine; the clinic catalogue is committed on purpose.
 data/calls.db
 data/calls.db-*
+data/ops-smoke.db
+data/ops-smoke.db-*
 data/recordings/
 
 # Server output when it is started detached.
 server.out
 server.err
+server.pid
+ngrok.out
+ngrok.err
 

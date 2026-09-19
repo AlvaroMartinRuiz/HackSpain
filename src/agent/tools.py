@@ -148,7 +148,10 @@ SCHEMAS: list[dict[str, Any]] = [
             "name": "nearest_site",
             "description": (
                 "Which site is closest to where the caller says they are, and whether it can "
-                "serve what they need. Pass the address or town as they said it."
+                "serve what they need. Pass the address, street, plaza or town as they said it. "
+                "Always call this when they describe a place instead of naming Centro, Norte or "
+                "Sur. Book at `nearest_serving`, not at the geographically closest site if that "
+                "one cannot do what they asked."
             ),
             "parameters": {
                 "type": "object",
@@ -487,7 +490,27 @@ class ToolBox:
                         "Direct price questions to the insurer without inventing a figure."}
 
     async def _tool_nearest_site(self, args: dict[str, Any]) -> dict[str, Any]:
-        return self.engine.nearest_site(str(args.get("where", "")), args.get("specialty_id"))
+        result = self.engine.nearest_site(str(args.get("where", "")), args.get("specialty_id"))
+        serving = result.get("nearest_serving") or {}
+        if not result.get("resolved"):
+            result["guidance"] = (
+                "Could not place that address. Ask for the town or district, then call again."
+            )
+            return result
+        location_id = serving.get("location_id")
+        if not location_id:
+            result["guidance"] = (
+                "No site can serve that specialty. Tell the caller so, and call "
+                "end_without_booking if they still want it."
+            )
+            return result
+        result["guidance"] = (
+            "Tell the caller which site that is, in one sentence. Then pass "
+            f"`location_id={location_id}` to find_appointments. Do not pick a site from memory "
+            "or from the addresses in the briefing — the closest site that cannot serve them "
+            "is the wrong answer."
+        )
+        return result
 
     # ---- availability -------------------------------------------------
 
@@ -535,11 +558,28 @@ class ToolBox:
         if rerouted:
             specialty_id = rerouted
 
+        location_id = args.get("location_id")
+        if location_id and specialty_id:
+            serving = self.catalog.locations_serving(specialty_id)
+            if serving and location_id not in serving:
+                return {
+                    "options": [],
+                    "location_cannot_serve": True,
+                    "requested_location": location_id,
+                    "locations_that_serve": sorted(serving),
+                    "guidance": (
+                        f"{location_id} has no {specialty_id}. The sites that do are "
+                        f"{sorted(serving)}. Tell the caller the closest of those cannot do "
+                        "what they need, then search again with one of `locations_that_serve` "
+                        "(the nearest from nearest_site, if you have it)."
+                    ),
+                }
+
         search = await self.engine.find_slots(
             patient_id=self.patient.get("patient_id"),
             specialty_id=specialty_id,
             provider_id=provider_id,
-            location_id=args.get("location_id"),
+            location_id=location_id,
             when=args.get("when"),
             part_of_day=args.get("part_of_day"),
             language=args.get("language"),
@@ -828,14 +868,15 @@ class ToolBox:
         return any(a.get("appointment_id") == appointment_id for a in upcoming)
 
     def _policy_for(self, slot: Slot) -> Optional[str]:
-        payable = set(slot.payable_with)
+        payable = [plan for plan in slot.payable_with if plan]
         own = (self.patient or {}).get("insurer")
         if own and own in payable:
             return own
         for insurer in self.named_insurers:
             if insurer in payable:
                 return insurer
-        return sorted(payable)[0] if payable else None
+        unique = list(dict.fromkeys(payable))
+        return unique[0] if len(unique) == 1 else None
 
     def _clean_reason(self, reason: Any) -> str:
         candidate = str(reason or "").strip()

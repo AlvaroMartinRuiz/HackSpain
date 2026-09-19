@@ -3,7 +3,7 @@
 ## Desde cero en una máquina nueva
 
 Python 3.11 o más nuevo. Nosotros corremos 3.14 y no hace falta igualarlo: en la
-ruta configurada (Deepgram para escuchar y para hablar) el audio viaja en µ-law
+ruta configurada (ElevenLabs para escuchar y para hablar) el audio viaja en µ-law
 de punta a punta y no pasa por `audioop`, que es lo único que cambió en 3.13.
 
 ```powershell
@@ -93,30 +93,27 @@ antes de entregarlo:
 .\.venv\Scripts\python scripts\mock_call.py --url wss://tu-nombre.ngrok-free.app/ws
 ```
 
-## Voz: Aura para practicar, ElevenLabs para puntuar
+## Voz: ElevenLabs en el cable, Aura de reserva
 
-El default es Aura (`TTS_PROVIDER=deepgram`): misma clave que el transcriptor,
-µ-law 8 kHz, y no gasta los caracteres del plan Creator. Dejadlo así para
-ensayos y llamadas de práctica.
-
-ElevenLabs es el plan Creator: **131.000 caracteres, unos dos Run All**. Cuando
-se acaba, la voz se cae y cada llamada muda es un caso nuestro. No la uséis
-para practicar. Para un Run All o para la demo del jurado:
+STT y TTS van por ElevenLabs (`STT_PROVIDER=elevenlabs`, `TTS_PROVIDER=elevenlabs`):
+Scribe v2 realtime en la escucha, Flash (y v3 conversacional en catalán) en la
+voz. Aura sigue en el código como reserva si Flash responde 429, y se puede
+volver a ella para practicar sin gastar el plan Creator:
 
 ```
-TTS_PROVIDER=elevenlabs
+STT_PROVIDER=deepgram
+TTS_PROVIDER=deepgram
 ```
 
-Si Aura no está y hay que practicar audio de todos modos: `TTS_PROVIDER=openai`.
-
-La lógica se itera en texto, sin cuota de voz:
+El plan Creator de ElevenLabs tiene **131.000 caracteres de TTS**, unos dos
+Run All. No la uséis para ensayar frases. La lógica se itera en texto:
 
 ```powershell
 .\.venv\Scripts\python scripts\rehearse.py
 ```
 
 Llamadas de práctica **solo** para lo que depende del audio: ruido (p12),
-interrupciones (p13), idiomas (p11). Y con Aura u OpenAI, no ElevenLabs.
+interrupciones (p13), idiomas (p11).
 
 ## Antes de cada Run All
 

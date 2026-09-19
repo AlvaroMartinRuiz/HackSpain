@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info(
         "ready on :%s%s — stt=%s llm=%s tts=%s",
         settings.port, "/ws",
-        settings.stt_provider if settings.deepgram_api_key else "whisper-fallback",
+        settings.stt_active,
         settings.llm_model if settings.llm_api_key else "NONE",
         settings.tts_provider,
     )

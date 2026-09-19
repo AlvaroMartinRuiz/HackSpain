@@ -79,16 +79,20 @@ Por eso las trampas del reto no dependen de que el modelo "se acuerde":
 
 ## Barge-in
 
-Deepgram manda resultados parciales. El primer parcial con contenido suficiente
-mientras el agente habla corta la reproducción: se vacían las dos colas, se sube
-un contador de generación (lo que hace que el audio en vuelo se descarte), se
-manda `clear` por el cable y **se recorta el último turno del agente a lo que el
-paciente realmente llegó a oír**, proporcional a los frames enviados. Sin ese
-recorte el modelo cree haber dicho cosas que nadie escuchó.
+Scribe (y Deepgram, si se vuelve a él) mandan resultados parciales. El primer
+parcial con contenido suficiente mientras el agente habla corta la
+reproducción: se vacían las dos colas, se sube un contador de generación (lo
+que hace que el audio en vuelo se descarte), se manda `clear` por el cable y
+**se recorta el último turno del agente a lo que el paciente realmente llegó a
+oír**, proporcional a los frames enviados. Sin ese recorte el modelo cree haber
+dicho cosas que nadie escuchó.
 
-Un parcial de menos de siete caracteres no interrumpe, y tampoco los primeros
+Un parcial de menos de dos palabras no interrumpe, y tampoco los primeros
 350 ms de habla del agente: con ruido a 5 dB de SNR (problema 12) un gate más
-sensible corta la llamada cada dos frases.
+sensible corta la llamada cada dos frases. Ese umbral de dos palabras en un
+resultado interino es el que recomienda Deepgram para Nova-3; un final de una
+sola palabra sí corta. Scribe filtra ruido de fondo en la sesión; el audio a
+Nova-3, si se usa, va sin reducir ruido.
 
 ## La consola
 
@@ -119,11 +123,11 @@ perdiste hasta el lunes; esto sí.
 
 ## Qué falta y se sabe
 
-- Hay una llamada con ruido de fondo real que no se ha probado todavía: el gate
-  de barge-in está ajustado a mano, no medido contra las cuatro texturas.
-- El problema 16 (el paciente actúa según lo que le digas) depende de que el
-  modelo use `clinic_facts` en vez de recordar: está en el prompt y en la
-  herramienta, pero no hay escenario que lo verifique aún.
-- El gazetteer resuelve municipios y distritos, no calles. Las coordenadas
-  publicadas dan margen de sobra, pero una dirección de un pueblo pequeño que no
-  esté en la lista se queda sin resolver y el agente pregunta.
+- Hay una llamada con ruido de fondo real que no se ha medido todavía contra
+  las cuatro texturas (calle, tele, habitación, coche). El gate de barge-in
+  sigue dos palabras en un parcial, una en un final. Scribe filtra el fondo;
+  Nova-3, si se usa, no.
+- El gazetteer cubre municipios, distritos, códigos postales de la corona y
+  los hitos de los casos públicos (Sol, Preciados, Castilla, Castellana). Una
+  calle de un pueblo que no esté en esa lista se queda sin resolver y el
+  agente pregunta.

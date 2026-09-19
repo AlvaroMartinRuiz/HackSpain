@@ -56,6 +56,10 @@ def main() -> int:
     check("omitted letter is flagged", missing["letter_missing"], True)
     check("omitted letter is still derived", missing["value"], "12345678Z")
     check("wrong letter is not 'missing'", parse_national_id("12345678A")["letter_missing"], False)
+    spoken = parse_national_id("cuatro cuatro cinco cinco seis seis siete siete zeta")
+    check("spoken digits are read", spoken["value"] and str(spoken["value"]).startswith("44556677"), True)
+    nie = parse_national_id("ye cuatro nueve nueve siete dos siete cero eme")
+    check("spoken NIE keeps the prefix", str(nie["value"] or "").startswith("Y4997270"), True)
 
     section("STT gluing the id to the phone, and the insurer to the email")
     check(
@@ -73,7 +77,8 @@ def main() -> int:
     check("cinitas on the domain is Sanitas", insurer, "sanitas")
 
     section("Phones fold to nine digits, whatever arrives")
-    for raw in ("+34612345678", "0034612345678", "612 345 678", "612345678"):
+    for raw in ("+34612345678", "0034612345678", "612 345 678", "612345678",
+                "seis uno dos tres cuatro cinco seis siete ocho"):
         check(f"{raw!r}", normalize_phone(raw), "612345678")
 
     section("Dictated emails")
@@ -217,12 +222,18 @@ def main() -> int:
     )
 
     section("Nearest site, by straight-line distance")
+    engine = SchedulingEngine(None, catalog)  # type: ignore[arg-type]
     for where, expected in [
         ("Calle de Madrid 54, en Getafe", "sur"),
         ("Alberto Alcocer, Chamartín", "norte"),
         ("Gran Vía, Madrid centro", "centro"),
         ("estoy en Alcobendas", "norte"),
         ("vivo en Leganés", "sur"),
+        ("I'm right in the centre, at Calle de Preciados 3, by Puerta del Sol", "centro"),
+        ("I'm at Paseo de la Castellana 189, at Plaza de Castilla", "norte"),
+        ("I'm in Getafe, at Calle de Madrid 54", "sur"),
+        ("Calle de Preciados 3, 28013 Madrid", "centro"),
+        ("Paseo de la Castellana 189, 28046 Madrid", "norte"),
     ]:
         located = locate(where)
         if located is None:
@@ -231,6 +242,37 @@ def main() -> int:
         _place, latitude, longitude = located
         ranked = catalog.rank_locations_by_distance(latitude, longitude)
         check(where, ranked[0][0].id, expected)
+
+    alcala_street = locate("Calle de Alcalá 45, Madrid")
+    check(
+        "Calle de Alcalá is Madrid, not Alcalá de Henares",
+        None if alcala_street is None else alcala_street[0] != "alcala de henares",
+        True,
+    )
+    check(
+        "Alcalá de Henares still resolves as itself",
+        None if locate("estoy en Alcalá de Henares") is None
+        else locate("estoy en Alcalá de Henares")[0],
+        "alcala de henares",
+    )
+
+    gynae_from_getafe = engine.nearest_site(
+        "I'm in Getafe, at Calle de Madrid 54", "gynaecology"
+    )
+    check(
+        "gynaecology from Getafe is Centro, which can serve it",
+        (gynae_from_getafe.get("nearest_serving") or {}).get("location_id"),
+        "centro",
+    )
+    physio_from_sol = engine.nearest_site(
+        "I'm right in the centre, at Calle de Preciados 3, by Puerta del Sol",
+        "physiotherapy",
+    )
+    check(
+        "physiotherapy from Sol is Sur, the only site that has it",
+        (physio_from_sol.get("nearest_serving") or {}).get("location_id"),
+        "sur",
+    )
 
     section("ASISA can never book physiotherapy: it is only at Sur, which ASISA does not cover")
     physio_sites = catalog.locations_serving("physiotherapy")

@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config import settings  # noqa: E402
 from src.agent.brain import Agent  # noqa: E402
 from src.voice.language import decide_language  # noqa: E402
-from src.voice.stt import DeepgramTranscriber  # noqa: E402
+from src.voice.stt import DeepgramTranscriber, ElevenLabsTranscriber  # noqa: E402
 from src.voice.tts import (  # noqa: E402
     deepgram_model_for_language,
     elevenlabs_model_for_language,
@@ -62,6 +62,22 @@ def main() -> int:
     passed += check(
         "Catalan STT locks to ca",
         parse_qs(urlparse(DeepgramTranscriber(_noop, _noop)._url("ca")).query)["language"] == ["ca"],
+    )
+
+    qs = parse_qs(urlparse(DeepgramTranscriber(_noop, _noop)._url()).query)
+    total += 1
+    passed += check("numerals are on", qs.get("numerals") == ["true"])
+
+    scribe = parse_qs(urlparse(ElevenLabsTranscriber(_noop, _noop)._url()).query)
+    total += 1
+    passed += check("Scribe listens to µ-law 8 kHz", scribe.get("audio_format") == ["ulaw_8000"])
+    total += 1
+    passed += check("Scribe commits on VAD", scribe.get("commit_strategy") == ["vad"])
+    total += 1
+    passed += check(
+        "Catalan Scribe lock",
+        parse_qs(urlparse(ElevenLabsTranscriber(_noop, _noop)._url("ca")).query).get("language_code")
+        == ["ca"],
     )
 
     total += 1

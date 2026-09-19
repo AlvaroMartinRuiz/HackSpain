@@ -186,7 +186,7 @@ function renderOverview(overview) {
   const endpoint = (overview.endpoint && overview.endpoint.public_ws_url)
     || `wss://…:${(overview.endpoint || {}).port}${(overview.endpoint || {}).path || "/ws"}`;
   const pills = [
-    `<span class="pill">stt <b>${escapeHtml(p.stt)}</b></span>`,
+    `<span class="pill">stt <b>${escapeHtml(p.stt)}</b>${p.stt_model ? ` · ${escapeHtml(p.stt_model)}` : ""}</span>`,
     `<span class="pill">model <b>${escapeHtml(p.llm)}</b></span>`,
     `<span class="pill">voice <b>${escapeHtml(p.tts)}</b></span>`,
     `<span class="pill">endpoint <b>${escapeHtml(endpoint)}</b></span>`,

@@ -2,8 +2,8 @@
 
 Each provider streams, so the first frames go out while the rest is still
 being synthesised. Deepgram Aura, ElevenLabs and Cartesia return µ-law
-directly; OpenAI returns PCM and is converted here. Aura is the default;
-ElevenLabs is what you switch to for a scored run.
+directly; OpenAI returns PCM and is converted here. ElevenLabs is the default;
+Aura is the automatic fallback if Flash 429s.
 """
 
 from __future__ import annotations
@@ -266,12 +266,10 @@ def build_synthesizer() -> Synthesizer:
         primary = OpenAISynthesizer()
 
     if primary is None:
-        # Prefer Aura when nothing was asked for: same key as STT, cheap enough
-        # that a missing TTS_PROVIDER does not spend the Creator allowance.
-        if settings.deepgram_api_key:
-            primary = DeepgramSynthesizer()
-        elif settings.elevenlabs_api_key:
+        if settings.elevenlabs_api_key:
             primary = ElevenLabsSynthesizer()
+        elif settings.deepgram_api_key:
+            primary = DeepgramSynthesizer()
         elif settings.llm_api_key:
             primary = OpenAISynthesizer()
         else:

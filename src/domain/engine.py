@@ -677,16 +677,23 @@ class SchedulingEngine:
 def _choose_policy(
     slot: Slot, own_insurer: Optional[str], named: Optional[Sequence[str]]
 ) -> Optional[str]:
-    """The plan the appointment is billed against, never a guess."""
-    payable = set(slot.payable_with)
+    """The plan the appointment is billed against, never a guess.
+
+    A slot payable with several plans is not a licence to pick one the caller
+    never held: that is how the second-policy control case is failed.
+    """
+    payable = [plan for plan in slot.payable_with if plan]
     if not payable:
         return None
-    if own_insurer and own_insurer in payable:
+    payable_set = set(payable)
+    if own_insurer and own_insurer in payable_set:
         return own_insurer
     for insurer in named or ():
-        if insurer in payable:
+        if insurer in payable_set:
             return insurer
-    return sorted(payable)[0]
+    # One plan on the slot is the API's decision, not ours.
+    unique = list(dict.fromkeys(payable))
+    return unique[0] if len(unique) == 1 else None
 
 
 def _unique(slots: list[Slot]) -> list[Slot]:

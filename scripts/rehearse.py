@@ -491,6 +491,63 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
         verify=verify_language,
     ))
 
+    # 15 — The Nearest Site. Public cases name streets, not clinic ids.
+    def verify_nearest(expected_site: str):
+        def verify(response: dict[str, Any], result: Result) -> None:
+            result.check("nearest_site was consulted",
+                         "nearest_site" in tools_used(response),
+                         ", ".join(tools_used(response)) or "no tools at all")
+            books = actions_of(response, "book")
+            if not result.check("a BOOK came out", len(books) == 1,
+                                str([s["action"] for s in response["submissions"]])):
+                return
+            site = books[0]["payload"]["location_id"]
+            result.check(f"booked at {expected_site}", site == expected_site,
+                         f"{site} vs {expected_site}")
+        return verify
+
+    scenarios.append(Scenario(
+        key="nearest_sol",
+        title="15 · The Nearest Site — Preciados / Puerta del Sol is Centro",
+        from_number=f"+34{known['phone']}",
+        turns=[
+            "I'm right in the centre, at Calle de Preciados 3, by Puerta del Sol. "
+            "Which of your clinics is closest to me?",
+            f"I'm {full_name(known)}, born {spoken_date(known['date_of_birth'])}.",
+            "The earliest general practice appointment at that clinic, please.",
+            "Yes, that one. Book it.",
+        ],
+        verify=verify_nearest("centro"),
+    ))
+
+    scenarios.append(Scenario(
+        key="nearest_getafe",
+        title="15 · The Nearest Site — Getafe is Sur for a GP",
+        from_number=f"+34{known['phone']}",
+        turns=[
+            "I'm in Getafe, at Calle de Madrid 54. Which clinic is closest?",
+            f"I'm {full_name(known)}, born {spoken_date(known['date_of_birth'])}.",
+            "The earliest general practice appointment there, please.",
+            "Yes, book that one.",
+        ],
+        verify=verify_nearest("sur"),
+    ))
+
+    scenarios.append(Scenario(
+        key="nearest_getafe_gynae",
+        title="15 · The Nearest Site — Getafe wants gynaecology, which is only at Centro",
+        from_number=f"+34{known['phone']}",
+        turns=[
+            "I'm in Getafe, at Calle de Madrid 54. Which of your clinics is closest?",
+            f"I'm {full_name(known)}, born {spoken_date(known['date_of_birth'])}.",
+            "I need a gynaecology appointment at whichever clinic can actually see me.",
+            "If the closest one has nobody for that, the next nearest is fine. "
+            "The first slot they have, please.",
+            "Yes, that one.",
+        ],
+        verify=verify_nearest("centro"),
+    ))
+
     # 16 — The Questions: the caller acts on whatever they are told, so a wrong
     # fact shows up as an unbookable slot rather than as a bad sentence.
     def verify_questions(response: dict[str, Any], result: Result) -> None:
