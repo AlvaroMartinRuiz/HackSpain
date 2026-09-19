@@ -236,6 +236,54 @@ class CallStore:
                 return call
         return None
 
+    def load(self, call_id: str) -> Optional[LiveCall]:
+        """Memory first; after a restart rebuild the transcript from sqlite events."""
+        found = self.get(call_id)
+        if found is not None:
+            return found
+        events = self.replay(call_id)
+        row = self._call_row(call_id)
+        if not events and row is None:
+            return None
+        call = LiveCall(
+            call_id=call_id,
+            from_number=row["from_number"] if row else None,
+            status=row["status"] if row else "finished",
+        )
+        if row:
+            call.started_at = row["started_at"] or call.started_at
+            call.ended_at = row["ended_at"]
+            if call.ended_at:
+                call.activity = "ended"
+        for event in events:
+            self._apply(call, event["kind"], event["payload"] or {})
+            call.events.append({
+                "call_id": call_id,
+                "seq": event["seq"],
+                "ts": event["ts"],
+                "kind": event["kind"],
+                "payload": event["payload"],
+            })
+        return call
+
+    def _call_row(self, call_id: str) -> Optional[dict[str, Any]]:
+        if self._db is None:
+            return None
+        with self._lock:
+            row = self._db.execute(
+                "SELECT from_number, started_at, ended_at, status FROM calls WHERE call_id = ?",
+                (call_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        from_number, started_at, ended_at, status = row
+        return {
+            "from_number": from_number,
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "status": status,
+        }
+
     def close_call(self, call_id: str, status: str = "finished") -> Optional[LiveCall]:
         call = self._live.pop(call_id, None)
         if call is None:

@@ -326,7 +326,7 @@ async function selectCall(callId) {
   try {
     const response = await fetch(`/api/console/calls/${encodeURIComponent(callId)}`);
     if (!response.ok) return;
-    state.detail = await response.json();
+    state.detail = _hydrateDetail(await response.json());
     renderDetail();
   } catch (error) {
     /* the live feed will fill it in */
@@ -497,6 +497,64 @@ function clinicRow(call) {
 
 // ---- the live feed ---------------------------------------------------
 
+/** After a restart the API may only have sqlite events, not the in-memory
+ * transcript. Rebuild the conversation (and the tabs) from those events. */
+function _hydrateDetail(detail) {
+  if (!detail) return detail;
+  const events = detail.events || [];
+  if (!events.length) return detail;
+  if (Array.isArray(detail.transcript) && detail.transcript.length) return detail;
+
+  const transcript = [];
+  const tool_calls = [];
+  const clinic_calls = [];
+  const decisions = [];
+  const submissions = [];
+  for (const event of events) {
+    const payload = event.payload || {};
+    if (event.kind === "stt_final" && payload.text) {
+      transcript.push({ role: "caller", text: payload.text, ts: event.ts });
+    } else if (event.kind === "agent_said" && payload.text) {
+      transcript.push({ role: "agent", text: payload.text, ts: event.ts });
+    } else if (event.kind === "interruption") {
+      transcript.push({
+        role: "caller", cut: true,
+        text: `⟨cuts the agent⟩ ${payload.heard || ""}`,
+        ts: event.ts,
+      });
+    } else if (event.kind === "tool_call") {
+      tool_calls.push({ ...payload, ts: event.ts });
+    } else if (event.kind === "clinic_call") {
+      clinic_calls.push({ ...payload, ts: event.ts });
+    } else if (event.kind === "decision") {
+      decisions.push({ ...payload, ts: event.ts });
+    } else if (event.kind === "submit") {
+      submissions.push({ ...payload, ts: event.ts });
+    } else if (event.kind === "patient_identified") {
+      detail.patient_full = payload.patient;
+    }
+  }
+  detail.transcript = transcript;
+  if (!Array.isArray(detail.tool_calls)) detail.tool_calls = tool_calls;
+  if (!Array.isArray(detail.clinic_calls)) detail.clinic_calls = clinic_calls;
+  if (!Array.isArray(detail.decisions)) detail.decisions = decisions;
+  if (!Array.isArray(detail.submissions)) detail.submissions = submissions;
+  return detail;
+}
+
+function _mergeLiveSummary(detail, summary) {
+  // summary.tool_calls is a count; detail.tool_calls is the list. Copying the
+  // summary over the detail used to wipe the transcript's sibling arrays and
+  // then throw when the tabs tried to .map a number.
+  for (const [key, value] of Object.entries(summary || {})) {
+    if (key === "tool_calls" || key === "clinic_calls" || key === "errors"
+        || key === "transcript" || key === "decisions" || key === "submissions") {
+      continue;
+    }
+    detail[key] = value;
+  }
+}
+
 function applyEvent(message) {
   const { event, summary } = message;
   if (summary) {
@@ -547,7 +605,7 @@ function applyEvent(message) {
       break;
   }
 
-  if (summary) Object.assign(detail, summary);
+  if (summary) _mergeLiveSummary(detail, summary);
   renderDetail();
 }
 

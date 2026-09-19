@@ -129,7 +129,7 @@ async def design_assets() -> dict[str, Any]:
 @router.get("/calls/{call_id}")
 async def call_detail(call_id: str) -> dict[str, Any]:
     recordings = tape.available(call_id)
-    call = store.get(call_id)
+    call = store.load(call_id)
     if call is not None:
         return {**call.detail(), "recordings": recordings}
     events = store.replay(call_id)
