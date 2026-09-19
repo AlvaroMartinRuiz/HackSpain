@@ -118,6 +118,9 @@ class Settings:
     elevenlabs_model: str = field(
         default_factory=lambda: _env("ELEVENLABS_MODEL", default="eleven_flash_v2_5")
     )
+    elevenlabs_model_ca: str = field(
+        default_factory=lambda: _env("ELEVENLABS_MODEL_CA", default="eleven_v3_conversational")
+    )
     cartesia_api_key: str = field(default_factory=lambda: _env("CARTESIA_API_KEY"))
     cartesia_voice_id: str = field(default_factory=lambda: _env("CARTESIA_VOICE_ID"))
     cartesia_model: str = field(default_factory=lambda: _env("CARTESIA_MODEL", default="sonic-2"))

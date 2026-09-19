@@ -150,12 +150,14 @@ class ElevenLabsSynthesizer(Synthesizer):
     async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
         path = f"/v1/text-to-speech/{settings.elevenlabs_voice_id}/stream"
         params = {"output_format": "ulaw_8000", "optimize_streaming_latency": "3"}
+        code = language.lower()[:2]
+        # Flash does not speak Catalan; v3 conversational does, ~0.5 s slower.
+        model = settings.elevenlabs_model_ca if code == "ca" else settings.elevenlabs_model
         body = {
             "text": text,
-            "model_id": settings.elevenlabs_model,
+            "model_id": model,
             "voice_settings": {"stability": 0.4, "similarity_boost": 0.7, "speed": 1.0},
         }
-        code = language.lower()[:2]
         if code in _SUPPORTED_ELEVENLABS_LANGUAGES:
             body["language_code"] = code
 

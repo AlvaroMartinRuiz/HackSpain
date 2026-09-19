@@ -527,6 +527,11 @@ class ToolBox:
             own = self.patient.get("insurer")
             insurers = ([own] if own else []) + self.named_insurers
 
+        # A Catalan speaker is booked with a doctor who speaks Catalan, whether or
+        # not the model thinks to ask for one. Only Catalan: every doctor speaks
+        # Spanish, and not every doctor speaks English.
+        language = args.get("language") or ("ca" if self.session.language == "ca" else None)
+
         # The age boundary is the clinic's rule, not the caller's problem: asking
         # for "the doctor" for an eight-year-old is paediatrics, not a refusal.
         specialty_id = args.get("specialty_id")
@@ -541,13 +546,15 @@ class ToolBox:
             location_id=args.get("location_id"),
             when=args.get("when"),
             part_of_day=args.get("part_of_day"),
-            language=args.get("language"),
+            language=language,
             insurers=insurers,
         )
 
         await self.session.record("decision", {
             "stage": "availability",
             "asked": {k: v for k, v in args.items() if v},
+            "language_filter": language,
+            "language_source": ("model" if args.get("language") else "stt") if language else None,
             "rerouted_by_age": rerouted,
             "window": [d.isoformat() if d else None for d in search.window],
             "found": len(search.slots),

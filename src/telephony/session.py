@@ -529,7 +529,7 @@ class CallSession:
             return
         await self.record("stt_final", {"text": text, "language": language})
         if language:
-            self.language = language.lower()[:2]
+            self.language = _two_letter(language)
         if self._closed:
             return
 
@@ -597,6 +597,16 @@ class CallSession:
             result = await self.client.submit(action, payload)
         self.submissions.append(result)
         return result
+
+
+# Transcribers disagree: Deepgram says "es", Scribe says "spa", and "spa"[:2]
+# is not a language.
+_ISO3 = {"cat": "ca", "spa": "es", "eng": "en", "glg": "gl", "eus": "eu", "baq": "eu"}
+
+
+def _two_letter(code: str) -> str:
+    code = code.lower().strip()
+    return _ISO3.get(code, code.split("-")[0][:2])
 
 
 def _drain(queue: asyncio.Queue) -> None:
