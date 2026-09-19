@@ -4,7 +4,7 @@ import asyncio
 import base64
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import numpy as np
 import soxr
@@ -347,6 +347,9 @@ class GraphProcessor(FrameProcessor):
         await super().cleanup()
 
 
+FRAME_S = 0.02
+
+
 class PacedAudioOutput(FrameProcessor):
     def __init__(self, socket: RecordedSocket, stream_sid: str, graph: GraphProcessor, *, tail_s: float = 0.1):
         super().__init__()
@@ -388,14 +391,20 @@ class PacedAudioOutput(FrameProcessor):
         while len(self._buffer) >= 320 and self.graph.accepts(tag):
             packet = bytes(self._buffer[:320])
             del self._buffer[:320]
-            await asyncio.sleep(max(0, self._next_send - time.monotonic()))
+            now = time.perf_counter()
+            # A stalled provider must not turn into a burst when audio resumes.
+            if self._next_send < now - FRAME_S:
+                self._next_send = now
+            await asyncio.sleep(max(0, self._next_send - now))
             if not self.graph.accepts(tag):
                 return
             payload = pcm16_to_ulaw(packet)
             sent = await self._send({"event": "media", "media": {"payload": base64.b64encode(payload).decode("ascii")}}, tag)
             if not sent or not self.graph.accepts(tag):
                 return
-            self._next_send = time.monotonic() + 0.02
+            # Advance the schedule, not the clock: on Windows the loop wakes in 15.6 ms steps,
+            # and re-basing on each wake-up played audio at ~0.7x real time.
+            self._next_send += FRAME_S
             self._signal = self._signal or bool(payload.translate(None, b"\xff\x7f"))
             if not self._speaking:
                 self._speaking = True
@@ -445,7 +454,7 @@ class PacedAudioOutput(FrameProcessor):
                 if self._resampler is not None:
                     self._buffer.extend(self._resampler.resample_chunk(np.empty(0, dtype="int16"), last=True).astype("<i2").tobytes())
                 await self._drain(tag, final=True)
-                await asyncio.sleep(max(0, self._next_send - time.monotonic()) + self.tail_s)
+                await asyncio.sleep(max(0, self._next_send - time.perf_counter()) + self.tail_s)
                 if not self.graph.accepts(tag):
                     return
                 sent = await self._send({"event": "mark", "mark": {"name": "v2-" + tag["response_id"]}}, tag)
@@ -500,12 +509,13 @@ def user_aggregators(config, *, vad_analyzer):
     ))
 
 
-async def run_voice(socket, stream_sid: str, controller: CallController, config: Config):
+async def run_voice(socket, stream_sid: str, controller: CallController, config: Config, *,
+                    on_ready: Callable[[], Awaitable[None]] | None = None, accepted_at: float | None = None):
     import aiohttp
 
     tape = RunTape(config.data_dir, controller.state.run_id)
     wrapped = RecordedSocket(socket, tape, stream_sid=stream_sid,
-                             send_timeout_s=getattr(config, "voice_send_timeout_s", 5))
+                             send_timeout_s=getattr(config, "voice_send_timeout_s", 5), accepted_at=accepted_at)
     runner = None
     graph = None
     try:
@@ -538,6 +548,8 @@ async def run_voice(socket, stream_sid: str, controller: CallController, config:
 
             @worker.event_handler("on_pipeline_started")
             async def started(_worker, _frame):
+                if on_ready is not None:
+                    await on_ready()
                 if controller.state.turn or controller.pending_reply is not None:
                     return
                 greeting = Reply(text=TEXT[controller.state.language]["hello"], language=controller.state.language,

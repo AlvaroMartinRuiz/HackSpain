@@ -118,12 +118,16 @@ class RunTape:
 
 
 class RecordedSocket:
-    def __init__(self, socket, tape: RunTape, *, stream_sid: str | None = None, send_timeout_s: float = 5):
+    def __init__(self, socket, tape: RunTape, *, stream_sid: str | None = None, send_timeout_s: float = 5,
+                 accepted_at: float | None = None):
         self.socket, self.tape = socket, tape
         self.stream_sid, self.send_timeout_s = stream_sid, send_timeout_s
         self._send_lock = asyncio.Lock()
-        self._audio_budget = 16000.0
-        self._audio_budget_at = time.monotonic()
+        # Audio that queued while the call was being set up arrived in real time, so it is
+        # allowed once on top of the 2 s burst; the allowance never refills past 2 s.
+        now = time.monotonic()
+        self._audio_budget = 16000.0 + max(0.0, now - (accepted_at if accepted_at is not None else now)) * 8000
+        self._audio_budget_at = now
 
     def __getattr__(self, name):
         return getattr(self.socket, name)
@@ -140,7 +144,8 @@ class RecordedSocket:
                 raise MediaProtocolError("unexpected inbound clear")
             if payload is not None:
                 now = time.monotonic()
-                self._audio_budget = min(16000.0, self._audio_budget + (now - self._audio_budget_at) * 8000)
+                refilled = self._audio_budget + (now - self._audio_budget_at) * 8000
+                self._audio_budget = min(max(16000.0, self._audio_budget), refilled)
                 self._audio_budget_at = now
                 if len(payload) > self._audio_budget:
                     raise MediaProtocolError("inbound audio exceeds realtime budget")
