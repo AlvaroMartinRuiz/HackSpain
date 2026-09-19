@@ -26,6 +26,7 @@ sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
 import httpx  # noqa: E402
 
+from src.agent.prompt import build_system_prompt  # noqa: E402
 from src.domain.catalog import Catalog  # noqa: E402
 from src.domain.identity import dni_check_letter, normalize_phone  # noqa: E402
 from src.domain.timeref import now_madrid, parse_slot  # noqa: E402
@@ -323,7 +324,9 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
                 "Hola, llamaba para anular mi cita.",
                 f"Soy {full_name(with_appointment)}, "
                 f"nacida el {spoken_date(with_appointment['date_of_birth'])}.",
-                "Sí, esa. Anúlela, por favor.",
+                # She may have several: the answer works whether the agent names one
+                # or asks which.
+                "La más próxima, la primera. Anúlela, por favor.",
                 "Nada más, gracias.",
             ],
             verify=verify_cancel,
@@ -374,6 +377,8 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
             "Buenas, me torcí el tobillo, lo tengo hinchado y me duele al andar.",
             f"Soy {full_name(known)}, {spoken_date(known['date_of_birth'])}.",
             "La primera que tenga me vale.",
+            # The agent confirms before booking, and a real caller answers.
+            "Sí, esa me vale. Resérvemela.",
         ],
         verify=verify_triage,
     ))
@@ -465,6 +470,8 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
                 f"Se llama {full_name(child)} y nació el {spoken_date(child['date_of_birth'])}.",
                 "Lleva dos días con fiebre y no quiere comer.",
                 "La primera que tengan, sí.",
+                # The agent confirms before booking, and a real caller answers.
+                "Sí, esa nos viene bien. Resérvela, por favor.",
             ],
             verify=verify_third_party,
         ))
@@ -496,8 +503,11 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
     # 16 — The Questions: the caller acts on whatever they are told, so a wrong
     # fact shows up as an unbookable slot rather than as a bad sentence.
     def verify_questions(response: dict[str, Any], result: Result) -> None:
+        # Either source is the clinic's own record: the tool, or the catalogue
+        # (hours included) generated into the system prompt.
         result.check("the clinic's own record was consulted",
-                     "clinic_facts" in tools_used(response),
+                     "clinic_facts" in tools_used(response)
+                     or "Opening hours:" in build_system_prompt(catalog, None),
                      ", ".join(tools_used(response)) or "no tools at all")
         books = actions_of(response, "book")
         if not result.check("a BOOK came out", len(books) == 1,
