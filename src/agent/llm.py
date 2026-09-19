@@ -58,7 +58,7 @@ class LLMClient:
                 "Content-Type": "application/json",
                 **settings.llm_extra_headers,
             },
-            timeout=httpx.Timeout(30.0, connect=6.0),
+            timeout=httpx.Timeout(settings.llm_timeout_s, connect=6.0),
             limits=httpx.Limits(max_connections=60, max_keepalive_connections=30),
         )
 
@@ -75,9 +75,12 @@ class LLMClient:
         body: dict[str, Any] = {
             "model": settings.llm_model,
             "messages": messages,
-            "temperature": settings.llm_temperature if temperature is None else temperature,
             "stream": True,
         }
+        if settings.llm_reasoning_effort:
+            body["reasoning_effort"] = settings.llm_reasoning_effort
+        else:
+            body["temperature"] = settings.llm_temperature if temperature is None else temperature
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
