@@ -305,11 +305,9 @@ class CallSession:
         started = time.perf_counter()
         first_byte_ms: Optional[int] = None
         total = 0
-        # Count as speaking from the moment we ask the voice, not when the
-        # first frame hits the line — otherwise barge-in is deaf during TTS.
-        if self._speaking_since is None:
-            self._speaking_since = time.monotonic()
-            self._current_text = text
+        # Barge-in during synthesis comes from is_speaking counting
+        # _synthesizing. _speaking_since stays "audio is on the line": the
+        # player keys the start of an utterance off it.
         try:
             async for chunk in self.synthesizer.stream(text, language):
                 if generation != self._generation:
@@ -348,6 +346,9 @@ class CallSession:
                 self._current_total = 0
 
             self._current_total += len(chunk)
+            # A playhead left behind by a pause would let the next frames out in
+            # a burst, already delivered in full by the time the caller cuts in.
+            playhead = max(playhead, time.monotonic())
             for frame in audio.frames(chunk):
                 if generation != self._generation:
                     break
@@ -447,9 +448,12 @@ class CallSession:
             return
         if self._looks_like_echo(text):
             return
-        speaking_ms = (now - (self._speaking_since or now)) * 1000
-        if speaking_ms < MIN_SPEAKING_MS_BEFORE_BARGE_IN:
-            return
+        # The grace period guards against our own first frames; before any
+        # audio is on the line there is nothing to guard.
+        if self._speaking_since is not None:
+            speaking_ms = (now - self._speaking_since) * 1000
+            if speaking_ms < MIN_SPEAKING_MS_BEFORE_BARGE_IN:
+                return
         if len(text.strip()) < MIN_BARGE_IN_CHARS:
             return
         await self._interrupt(text.strip())
