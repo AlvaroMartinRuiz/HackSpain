@@ -127,10 +127,14 @@ class Settings:
     greeting: str = field(
         default_factory=lambda: _env(
             "AGENT_GREETING",
-            default="Clínica Arenal, buenos días. ¿En qué puedo ayudarle?",
+            default="Clínica Arenal, good morning, buenos días. How can I help?",
         )
     )
     barge_in: bool = field(default_factory=lambda: _bool("BARGE_IN", True))
+    # Nearly every caller speaks English; a detected language replaces this.
+    default_language: str = field(default_factory=lambda: _env("DEFAULT_LANGUAGE", default="en").lower())
+    silence_prompt_s: float = field(default_factory=lambda: _float("SILENCE_PROMPT_S", 7.0))
+    silence_prompt_max: int = field(default_factory=lambda: _int("SILENCE_PROMPT_MAX", 2))
 
     # Observability
     db_path: str = field(default_factory=lambda: _env("DB_PATH", default=str(DATA_DIR / "calls.db")))

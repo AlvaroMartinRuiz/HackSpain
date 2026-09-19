@@ -12,6 +12,7 @@ import base64
 import time
 from typing import Any, Awaitable, Callable, Optional
 
+from src.agent import phrases
 from src.agent.brain import Agent
 from src.agent.llm import LLMClient
 from src.config import settings
@@ -98,7 +99,10 @@ class CallSession:
         self._closed = False
         self._sealing = False
         self._frozen = False
-        self.language = "es"
+        self.language = settings.default_language
+        # Not in _tasks: it is cancelled and re-created on every turn.
+        self._silence_task: Optional[asyncio.Task] = None
+        self._silence_prompts = 0
         self._started_at = time.monotonic()
         self._last_partial_at = 0.0
         self._media_frames = 0
@@ -187,6 +191,7 @@ class CallSession:
         if self._closing:
             return
         self._closing = True
+        self._disarm_silence()
 
         await self._recover_last_turn()
         self._closed = True
@@ -281,6 +286,7 @@ class CallSession:
         text = (text or "").strip()
         if not text:
             return
+        self._disarm_silence()
         # Logged when decided rather than when finished playing, so the console
         # shows the turn as the caller starts hearing it.
         await self.record("agent_said", {"text": text, "greeting": first})
@@ -300,6 +306,8 @@ class CallSession:
                 await self._synthesize(generation, text, language)
             finally:
                 self._synthesizing -= 1
+            # A synthesis that failed outright never reaches _finish_speaking.
+            self._arm_silence()
 
     async def _synthesize(self, generation: int, text: str, language: str) -> None:
         started = time.perf_counter()
@@ -373,6 +381,43 @@ class CallSession:
         self._current_sent = 0
         self._current_total = 0
         await self.record("agent_turn_end", {"text": text})
+        self._arm_silence()
+
+    # ---- the caller goes quiet ------------------------------------------
+
+    def _arm_silence(self) -> None:
+        """Start listening for silence, if the agent has nothing more to say."""
+        if (self.text_mode or self._closing or self._sealing or self.is_speaking
+                or self._turn_lock.locked()
+                or self._silence_prompts >= settings.silence_prompt_max):
+            return
+        self._disarm_silence()
+        self._silence_task = asyncio.create_task(
+            self._silence_watch(), name=f"silence:{self.call_id}"
+        )
+
+    def _disarm_silence(self) -> None:
+        task = self._silence_task
+        self._silence_task = None
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+
+    async def _silence_watch(self) -> None:
+        try:
+            await asyncio.sleep(settings.silence_prompt_s)
+        except asyncio.CancelledError:
+            return
+        if self.is_speaking or self._turn_lock.locked() or self._closing or self._sealing:
+            return
+        text = phrases.silence_prompt(self.language, self._silence_prompts)
+        self._silence_prompts += 1
+        await self.record("decision", {
+            "stage": "silence_prompt",
+            "attempt": self._silence_prompts,
+            "silent_s": settings.silence_prompt_s,
+        })
+        self.agent.note_agent_line(text)
+        await self.say(text)
 
     async def _send_media(self, frame: bytes) -> None:
         out = self._tape["outbound"]
@@ -435,10 +480,17 @@ class CallSession:
 
     # ---- listening ----------------------------------------------------
 
+    def _caller_is_talking(self) -> None:
+        self._disarm_silence()
+        self._silence_prompts = 0
+
     async def _on_speech_started(self) -> None:
+        self._caller_is_talking()
         await self.record("caller_speaking", {})
 
     async def _on_partial(self, text: str) -> None:
+        if not self._looks_like_echo(text):
+            self._caller_is_talking()
         now = time.monotonic()
         if now - self._last_partial_at > 0.4:
             self._last_partial_at = now
@@ -477,6 +529,7 @@ class CallSession:
             self._pending_turn = text
             return
 
+        self._caller_is_talking()
         async with self._turn_lock:
             pending: Optional[str] = text
             while pending:
@@ -484,6 +537,8 @@ class CallSession:
                 await self.agent.handle(current)
                 if self._pending_turn:
                     pending, self._pending_turn = self._pending_turn, None
+        # A turn that ended without new speech leaves nothing to re-arm on.
+        self._arm_silence()
 
     # ---- shared hooks --------------------------------------------------
 

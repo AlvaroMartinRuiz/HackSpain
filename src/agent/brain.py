@@ -6,6 +6,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
+from src.agent import phrases
 from src.agent.llm import Completion, LLMClient, LLMError
 from src.agent.prompt import build_system_prompt, chart_briefing
 from src.agent.tools import ToolBox
@@ -50,9 +51,7 @@ class Agent:
                 completion = await self._run_round()
             except LLMError as exc:
                 await self.session.record("error", {"where": "llm", "detail": str(exc)})
-                await self.session.say(
-                    "Perdone, no le he oído bien. ¿Me lo repite, por favor?"
-                )
+                await self.session.say(phrases.pick(phrases.RETRY, self.session.language))
                 return
 
             spoke = spoke or bool(completion.text.strip())
@@ -88,7 +87,7 @@ class Agent:
                 })
 
         if not spoke:
-            await self.session.say("Un momento, por favor.")
+            await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
 
         await self.session.note_response_latency(int((time.perf_counter() - started) * 1000))
 
@@ -173,6 +172,10 @@ class Agent:
         tool_calls and their results, which strict gateways reject outright.
         """
         self._pending_briefings.append(chart_briefing(patient, context))
+
+    def note_agent_line(self, text: str) -> None:
+        """A line said outside the model, so it knows it was said."""
+        self.messages.append({"role": "assistant", "content": text})
 
     def note_interruption(self, spoken_so_far: str) -> None:
         """Record only what the caller actually heard before cutting in."""
