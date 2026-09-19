@@ -6,6 +6,7 @@ what the agent asked the clinic and what came back.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any, Awaitable, Callable, Optional, Sequence
 
@@ -24,6 +25,12 @@ SUBMIT_ROUTES = {
     "escalate": "/submit/escalate",
 }
 
+# Bounded so the worst case (every attempt hanging) still lands inside the 30 s
+# window: 3 x 6 s of request plus 1.2 s of backoff is about 19 s.
+SUBMIT_ATTEMPTS = 3
+SUBMIT_BACKOFF_S = 0.4
+SUBMIT_TIMEOUT_S = 6.0
+
 
 class PlatformError(RuntimeError):
     def __init__(self, status: int, detail: Any) -> None:
@@ -41,10 +48,13 @@ class SubmitResult:
         self.status = status
         self.body = body
         self.elapsed_ms = elapsed_ms
+        self.attempts = 1
 
     @property
     def accepted(self) -> bool:
-        return self.status == 200
+        # Any 2xx, not just 200: a 201 read as a failure would fire the safety
+        # net and pile a NO_ACTION on top of a good booking.
+        return 200 <= self.status < 300
 
     @property
     def duplicate(self) -> bool:
@@ -54,6 +64,15 @@ class SubmitResult:
     def window_closed(self) -> bool:
         return self.status == 410
 
+    @property
+    def worth_retrying(self) -> bool:
+        """Transport failures and platform faults only.
+
+        404 (not our call), 410 (too late) and 422 (malformed) will not change
+        however many times we ask.
+        """
+        return self.status == 0 or 500 <= self.status < 600
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "action": self.action,
@@ -62,6 +81,7 @@ class SubmitResult:
             "accepted": self.accepted,
             "body": self.body,
             "elapsed_ms": self.elapsed_ms,
+            "attempts": self.attempts,
         }
 
 
@@ -172,18 +192,35 @@ class PlatformClient:
     # ---- submissions -------------------------------------------------
 
     async def submit(self, action: str, payload: dict[str, Any]) -> SubmitResult:
+        """Report one action, retrying the failures that a retry can fix.
+
+        This is the only place the whole call turns into score, and the window
+        stays open for 30 s after the socket closes, so a dropped connection
+        should not be what loses a case.
+        """
         path = SUBMIT_ROUTES.get(action)
         if path is None:
             raise ValueError(f"unknown submit action: {action}")
 
         started = time.perf_counter()
-        try:
-            response = await self._client.post(path, json=payload)
-            status, body = response.status_code, _safe_json(response)
-        except httpx.HTTPError as exc:
-            status, body = 0, {"error": str(exc)}
+        result: Optional[SubmitResult] = None
 
-        result = SubmitResult(action, payload, status, body, _ms(started))
+        for attempt in range(SUBMIT_ATTEMPTS):
+            try:
+                response = await self._client.post(
+                    path, json=payload, timeout=SUBMIT_TIMEOUT_S
+                )
+                status, body = response.status_code, _safe_json(response)
+            except httpx.HTTPError as exc:
+                status, body = 0, {"error": str(exc)}
+
+            result = SubmitResult(action, payload, status, body, _ms(started))
+            result.attempts = attempt + 1
+            if not result.worth_retrying or attempt == SUBMIT_ATTEMPTS - 1:
+                break
+            await asyncio.sleep(SUBMIT_BACKOFF_S * (attempt + 1))
+
+        assert result is not None
         await self._emit("submit", result.as_dict())
         return result
 

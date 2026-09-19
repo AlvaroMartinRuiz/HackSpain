@@ -203,9 +203,10 @@ function toolRow(call) {
 
 function submissionRow(submission) {
   const cls = submission.accepted ? "ok" : "err";
+  const retries = submission.attempts > 1 ? ` · ${submission.attempts} intentos` : "";
   return `<div class="entry">
     <div class="head"><b class="${cls === "ok" ? "stage" : "reason"}">${escapeHtml(submission.action)}</b>
-    <span class="ms">HTTP ${submission.status} · ${submission.elapsed_ms ?? "?"} ms</span></div>
+    <span class="ms">HTTP ${submission.status} · ${submission.elapsed_ms ?? "?"} ms${retries}</span></div>
     <pre>${escapeHtml(pretty(submission.payload))}</pre>
   </div>`;
 }
