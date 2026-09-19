@@ -82,8 +82,11 @@ def parse_national_id(raw: str) -> dict[str, object]:
     expected letter is always returned alongside whatever was heard.
     """
     cleaned = re.sub(r"[^0-9A-Za-z]", "", raw or "").upper()
+    # letter_missing: every digit arrived but the letter did not, which is how
+    # a phone line usually loses one. The letter is then derivable, never valid.
     result: dict[str, object] = {"input": raw, "cleaned": cleaned, "kind": None,
-                                 "valid": False, "value": None, "expected_letter": None}
+                                 "valid": False, "value": None, "expected_letter": None,
+                                 "letter_missing": False}
     if not cleaned:
         return result
 
@@ -92,7 +95,7 @@ def parse_national_id(raw: str) -> dict[str, object]:
         if len(body) == 8 and body[1:].isdigit():
             expected = nie_check_letter(body)
             result.update(kind="NIE", expected_letter=expected, value=body + expected,
-                          valid=letter == expected)
+                          valid=letter == expected, letter_missing=len(cleaned) == 8)
         return result
 
     digits = cleaned[:8]
@@ -100,7 +103,7 @@ def parse_national_id(raw: str) -> dict[str, object]:
     if len(digits) == 8 and digits.isdigit():
         expected = dni_check_letter(digits)
         result.update(kind="DNI", expected_letter=expected, value=digits + expected,
-                      valid=letter == expected)
+                      valid=letter == expected, letter_missing=len(cleaned) == 8)
     return result
 
 

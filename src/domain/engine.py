@@ -155,6 +155,14 @@ class SchedulingEngine:
             parsed = parse_national_id(national_id)
             if parsed["valid"]:
                 national_id_clean = str(parsed["value"])
+            elif parsed["letter_missing"]:
+                # A misheard digit derives a different, equally valid id, so a
+                # hit on this one still needs a second field to be trusted.
+                national_id_clean = str(parsed["value"])
+                trace.append(
+                    f"national id {national_id!r} arrived without its letter; searched as "
+                    f"{national_id_clean} (letter inferred, confirm another field)"
+                )
             else:
                 trace.append(
                     f"national id {national_id!r} failed its check letter "
@@ -589,7 +597,9 @@ class SchedulingEngine:
         """Build a registration payload, and name whatever is still missing."""
         problems: list[str] = []
         parsed = parse_national_id(str(fields.get("national_id", "")))
-        if not parsed["valid"]:
+        # A missing letter is filled in from the digits; the read-back before
+        # submitting is where the caller confirms it.
+        if not parsed["valid"] and not parsed["letter_missing"]:
             expected = parsed["expected_letter"]
             problems.append(
                 f"national id does not check out; expected letter {expected}"
