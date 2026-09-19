@@ -329,6 +329,7 @@ class ToolBox:
         self.last_reason: Optional[str] = None
         # What was last read back to a new patient; only that is ever registered.
         self.pending_registration: Optional[dict[str, Any]] = None
+        self.lookup_attempted = False
         # Provider ids a tool has actually handed over on this call. The briefing
         # lists every doctor by name, which is enough for the model to resolve a
         # spoken surname itself and skip the ambiguity find_doctor exists to
@@ -347,6 +348,7 @@ class ToolBox:
     # ---- lookups ------------------------------------------------------
 
     async def _tool_lookup_patient(self, args: dict[str, Any]) -> dict[str, Any]:
+        self.lookup_attempted = True
         result = await self.engine.identify(
             name=args.get("name"),
             national_id=args.get("national_id"),
@@ -869,7 +871,10 @@ class ToolBox:
         if self.last_reason and is_valid_reason(self.last_reason):
             return self.last_reason
         if self.patient is None:
-            return "patient_not_found"
+            # Nobody was ever looked up: not a caller we failed to find, but a
+            # call that was never about booking (a request for another
+            # patient's data, a sales call). Problem 14 expects out_of_scope.
+            return "patient_not_found" if self.lookup_attempted else "out_of_scope"
         return "no_availability"
 
 
