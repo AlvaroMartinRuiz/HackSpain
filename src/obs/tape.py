@@ -52,16 +52,22 @@ def save_call(call_id: str, inbound: bytes, outbound: bytes) -> None:
 
 
 def available(call_id: str) -> dict[str, bool]:
-    """What the console can play. Prefers the mixed conversation track."""
+    """Which tracks the console can play for this call."""
+    empty = {track: False for track in TRACKS}
     try:
         folder = _folder(call_id)
     except ValueError:
-        return {"conversation": False}
-    conversation = (folder / "conversation.wav").is_file()
-    if not conversation:
-        # Older tapes only have the sides — still playable once mixed on demand.
-        conversation = any((folder / f"{track}.wav").is_file() for track in SIDE_TRACKS)
-    return {"conversation": conversation}
+        return empty
+
+    flags = {
+        "inbound": (folder / "inbound.wav").is_file(),
+        "outbound": (folder / "outbound.wav").is_file(),
+        "conversation": (folder / "conversation.wav").is_file(),
+    }
+    # Older tapes may only have the sides — the mixed track is built on demand.
+    if not flags["conversation"] and (flags["inbound"] or flags["outbound"]):
+        flags["conversation"] = True
+    return flags
 
 
 def wav_path(call_id: str, track: str) -> Optional[Path]:

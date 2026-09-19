@@ -135,7 +135,62 @@ async def call_detail(call_id: str) -> dict[str, Any]:
     events = store.replay(call_id)
     if not events:
         raise HTTPException(status_code=404, detail="no such call")
-    return {"call_id": call_id, "replay_only": True, "events": events, "recordings": recordings}
+    # History-only calls are not still in memory, so rebuild the views the
+    # console needs from the event log — especially the transcript.
+    return {
+        "call_id": call_id,
+        "replay_only": True,
+        "events": events,
+        "recordings": recordings,
+        **_detail_from_events(events),
+    }
+
+
+def _detail_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Reconstruct transcript / decisions / tools from a durable event log."""
+    transcript: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
+    tool_calls: list[dict[str, Any]] = []
+    clinic_calls: list[dict[str, Any]] = []
+    submissions: list[dict[str, Any]] = []
+    patient_full: Optional[dict[str, Any]] = None
+    for event in events:
+        kind = event.get("kind")
+        payload = event.get("payload") or {}
+        ts = event.get("ts")
+        if kind == "stt_final":
+            transcript.append({"role": "caller", "text": payload.get("text", ""), "ts": ts})
+        elif kind == "agent_said":
+            transcript.append({"role": "agent", "text": payload.get("text", ""), "ts": ts})
+        elif kind == "interruption":
+            transcript.append({
+                "role": "caller", "cut": True, "ts": ts,
+                "text": f"⟨cuts the agent⟩ {payload.get('heard') or ''}".strip(),
+            })
+        elif kind == "decision":
+            decisions.append({**payload, "ts": ts})
+        elif kind == "tool_call":
+            tool_calls.append(payload)
+        elif kind == "clinic_call":
+            clinic_calls.append(payload)
+        elif kind == "submit":
+            submissions.append(payload)
+        elif kind == "patient_identified":
+            patient_full = payload.get("patient")
+    actions = [
+        {"action": s.get("action"), "accepted": s.get("accepted"), "status": s.get("status")}
+        for s in submissions
+    ]
+    return {
+        "transcript": transcript,
+        "decisions": decisions,
+        "tool_calls": tool_calls,
+        "clinic_calls": clinic_calls,
+        "submissions": submissions,
+        "actions": actions,
+        "patient_full": patient_full,
+        "turns": sum(1 for t in transcript if t.get("role") == "agent"),
+    }
 
 
 @router.get("/calls/{call_id}/audio/{track}")

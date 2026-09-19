@@ -1,9 +1,9 @@
-/* Control de llamadas y agentes.
+/* Socket Wizard — control site.
  *
  * Reads the same feed as the classic console — /api/console/overview for the
- * picture on arrival, /api/console/stream for everything after — and adds the
- * view the classic one has no room for: every agent at once, and what each of
- * them is doing this second.
+ * picture on arrival, /api/console/stream for everything after — and spreads it
+ * across pages so the floor, the history, a single transcript and a rehearsal
+ * each have a window of their own.
  *
  * Icons come from /api/console/assets, drawn by Quiver at build time. When
  * there are none the CSS falls back to coloured discs, so the page is never
@@ -19,6 +19,8 @@ const state = {
   tab: "decisions",
   stats: {},
   scope: "all",
+  page: "live",
+  returnTo: "#/",
 };
 
 const el = (id) => document.getElementById(id);
@@ -64,6 +66,87 @@ const msOrDash = (value) => (value ? `${value} ms` : "–");
  * the summary and then overwrites both with the full arrays. Reading either
  * shape here is cheaper than making the two payloads agree. */
 const countOf = (value) => (Array.isArray(value) ? value.length : (value ?? 0));
+
+// ---- routing ---------------------------------------------------------
+
+function parseRoute(hash = location.hash) {
+  const path = (hash.replace(/^#/, "") || "/").replace(/\/+$/, "") || "/";
+  if (path === "/calls") return { page: "calls" };
+  const match = path.match(/^\/calls\/([^/]+)$/);
+  if (match) return { page: "call", id: decodeURIComponent(match[1]) };
+  if (path === "/rehearse") return { page: "rehearse" };
+  return { page: "live" };
+}
+
+function pathFor(page, id) {
+  if (page === "calls") return "#/calls";
+  if (page === "call") return `#/calls/${encodeURIComponent(id)}`;
+  if (page === "rehearse") return "#/rehearse";
+  return "#/";
+}
+
+function go(path) {
+  const hash = path.startsWith("#") ? path : `#${path}`;
+  if (location.hash === hash) {
+    applyRoute();
+    return;
+  }
+  location.hash = hash;
+}
+
+function applyRoute() {
+  const route = parseRoute();
+  state.page = route.page;
+  document.body.dataset.page = route.page;
+
+  document.querySelectorAll(".view").forEach((view) => {
+    const hide = view.id !== `view-${route.page}`;
+    view.classList.toggle("hidden", hide);
+    view.toggleAttribute("hidden", hide);
+  });
+
+  document.querySelectorAll(".nav a[data-nav]").forEach((link) => {
+    const current = route.page === "call" ? "calls" : route.page;
+    const on = link.dataset.nav === current;
+    link.classList.toggle("on", on);
+    if (on) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+
+  const titles = {
+    live: "Live · Socket Wizard",
+    calls: "Calls · Socket Wizard",
+    call: "Call · Socket Wizard",
+    rehearse: "Rehearse · Socket Wizard",
+  };
+  document.title = titles[route.page] || "Socket Wizard";
+
+  if (route.page === "call") {
+    el("btn-back").setAttribute("href", state.returnTo || "#/");
+    if (route.id && state.selected !== route.id) {
+      selectCall(route.id, { navigate: false });
+    }
+  } else if (route.page === "rehearse") {
+    el("rehearse-turns").focus();
+  }
+}
+
+function rememberReturn() {
+  if (state.page === "calls") state.returnTo = "#/calls";
+  else if (state.page === "live") state.returnTo = "#/";
+}
+
+document.querySelectorAll("a[data-nav]").forEach((link) => {
+  link.addEventListener("click", (event) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    go(link.getAttribute("href"));
+  });
+});
+
+window.addEventListener("hashchange", applyRoute);
 
 // ---- the drawn parts -------------------------------------------------
 
@@ -127,6 +210,7 @@ function renderOverview(overview) {
   renderStats(overview.stats);
   renderAgents();
   renderCalls();
+  renderRecent();
 }
 
 const KPIS = [
@@ -181,11 +265,26 @@ const sorted = () => [...state.calls.values()].sort((a, b) => {
   return String(b.started_at).localeCompare(String(a.started_at));
 });
 
+function callerName(call) {
+  return (call.patient && call.patient.name) || call.from_number || call.call_id.slice(0, 12);
+}
+
 // ---- the fleet -------------------------------------------------------
 
 function renderAgents() {
   const live = sorted().filter((call) => call.live);
   el("agent-count").textContent = live.length;
+
+  const navCount = el("nav-live-count");
+  navCount.textContent = String(live.length);
+  navCount.classList.toggle("is-zero", live.length === 0);
+
+  const lede = el("live-lede");
+  if (lede) {
+    lede.textContent = live.length
+      ? `${live.length} on the line. Open a card to read the transcript.`
+      : "No one on the line. The endpoint is listening.";
+  }
 
   if (!live.length) {
     const scene = icon("empty-quiet");
@@ -198,13 +297,16 @@ function renderAgents() {
 
   el("agent-grid").innerHTML = live.map(agentCard).join("");
   el("agent-grid").querySelectorAll(".agent").forEach((node) => {
-    node.onclick = () => selectCall(node.dataset.id);
+    node.onclick = () => {
+      rememberReturn();
+      selectCall(node.dataset.id);
+    };
   });
 }
 
 function agentCard(call) {
   const activity = call.activity || "idle";
-  const who = (call.patient && call.patient.name) || call.from_number || call.call_id.slice(0, 12);
+  const who = callerName(call);
   const glyph = icon(`status-${activity}`);
   const selfAnimated = state.selfAnimated.has(`status-${activity}`) ? " self-animated" : "";
 
@@ -262,12 +364,22 @@ function renderCalls() {
     : `<tr class="empty-row"><td colspan="8">Nothing matches this filter</td></tr>`;
 
   el("calls-body").querySelectorAll("tr[data-id]").forEach((node) => {
-    node.onclick = () => selectCall(node.dataset.id);
+    const open = () => {
+      rememberReturn();
+      selectCall(node.dataset.id);
+    };
+    node.onclick = open;
+    node.onkeydown = (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open();
+      }
+    };
   });
 }
 
 function callRow(call) {
-  const who = (call.patient && call.patient.name) || call.from_number || call.call_id.slice(0, 12);
+  const who = callerName(call);
   const activity = call.live ? (call.activity || "idle") : "ended";
   const actions = call.actions || [];
 
@@ -284,7 +396,7 @@ function callRow(call) {
     ? dur(Date.now() - call.durationBase)
     : dur((call.duration_s || 0) * 1000);
 
-  return `<tr class="${selected.trim()}" data-id="${escapeHtml(call.call_id)}">
+  return `<tr class="${selected.trim()}" data-id="${escapeHtml(call.call_id)}" tabindex="0">
     <td class="dim">${escapeHtml(clock(call.started_at))}</td>
     <td class="who">${escapeHtml(who)}</td>
     <td><span class="act-tag ${activity}">${escapeHtml(ACTIVITY[activity] || activity)}</span></td>
@@ -294,6 +406,33 @@ function callRow(call) {
     <td class="num">${call.median_response_ms || ""}</td>
     <td class="acts">${record}${call.errors ? `<span class="badge err">${call.errors}</span>` : ""}</td>
   </tr>`;
+}
+
+function renderRecent() {
+  const node = el("recent-list");
+  const rows = sorted().slice(0, 8);
+  if (!rows.length) {
+    node.innerHTML = `<div class="empty-inline">No calls yet.</div>`;
+    return;
+  }
+  node.innerHTML = rows.map((call) => {
+    const activity = call.live ? (call.activity || "idle") : "ended";
+    const duration = call.live
+      ? dur(Date.now() - call.durationBase)
+      : dur((call.duration_s || 0) * 1000);
+    return `<button type="button" class="recent-row" data-id="${escapeHtml(call.call_id)}">
+      <span class="act-tag ${activity}">${escapeHtml(ACTIVITY[activity] || activity)}</span>
+      <span class="who">${escapeHtml(callerName(call))}</span>
+      <span class="dim">${escapeHtml(clock(call.started_at))} · ${escapeHtml(duration)}</span>
+      <span class="acts">${call.turns ?? 0} turns</span>
+    </button>`;
+  }).join("");
+  node.querySelectorAll("[data-id]").forEach((button) => {
+    button.onclick = () => {
+      rememberReturn();
+      selectCall(button.dataset.id);
+    };
+  });
 }
 
 /** Move the clocks on without rebuilding the cards, so hover and selection
@@ -318,14 +457,20 @@ function tickClocks() {
 
 // ---- the selected call ----------------------------------------------
 
-async function selectCall(callId) {
+async function selectCall(callId, { navigate = true } = {}) {
   if (!callId) return;
   state.selected = callId;
+  el("partial").textContent = "";
   renderAgents();
   renderCalls();
+  renderRecent();
+  if (navigate) go(pathFor("call", callId));
   try {
     const response = await fetch(`/api/console/calls/${encodeURIComponent(callId)}`);
-    if (!response.ok) return;
+    if (!response.ok) {
+      el("call-head").innerHTML = `<div class="call-head-empty">This call is not in the log.</div>`;
+      return;
+    }
     state.detail = _hydrateDetail(await response.json());
     renderDetail();
   } catch (error) {
@@ -365,9 +510,17 @@ function renderDetail() {
     <div class="chips">${chips.join("")}</div>
     ${patient.note ? `<div class="note">${escapeHtml(patient.note)}</div>` : ""}`;
 
+  if (state.page === "call") {
+    document.title = `${name} · Socket Wizard`;
+  }
+
   renderTape(detail);
-  el("transcript").innerHTML = (detail.transcript || []).map(turnRow).join("");
+  const turns = detail.transcript || [];
+  el("transcript").innerHTML = turns.length
+    ? turns.map(turnRow).join("")
+    : '<div class="transcript-empty">No transcript yet.</div>';
   el("transcript").scrollTop = el("transcript").scrollHeight;
+  paintStaticIcons(el("tape").parentElement || document);
   renderTabs();
 }
 
@@ -380,15 +533,26 @@ function renderDetail() {
  */
 function renderTape(detail) {
   const rec = detail.recordings || {};
-  const key = `${detail.call_id}|${Boolean(rec.conversation)}`;
+  const key = [
+    detail.call_id,
+    Boolean(rec.inbound),
+    Boolean(rec.outbound),
+    Boolean(rec.conversation),
+  ].join("|");
   if (state.tapeKey === key) return;
   state.tapeKey = key;
   el("tape").innerHTML = tapePlayers(detail);
-  const player = el("tape").querySelector("audio");
-  if (!player) return;
-  player.addEventListener("loadedmetadata", () => {
-    const slot = el("tape").querySelector(".len");
-    if (slot && Number.isFinite(player.duration)) slot.textContent = dur(player.duration * 1000);
+  el("tape").querySelectorAll("audio").forEach((player) => {
+    player.addEventListener("loadedmetadata", () => {
+      const slot = player.closest(".track")?.querySelector(".len");
+      if (slot && Number.isFinite(player.duration)) slot.textContent = dur(player.duration * 1000);
+    });
+    // One track at a time — three sides talking over each other is useless.
+    player.addEventListener("play", () => {
+      el("tape").querySelectorAll("audio").forEach((other) => {
+        if (other !== player) other.pause();
+      });
+    });
   });
 }
 
@@ -396,24 +560,34 @@ function tapePlayers(detail) {
   const id = detail.call_id;
   if (!id) return "";
   const rec = detail.recordings || {};
+  const hasAny = rec.inbound || rec.outbound || rec.conversation;
 
   const head = `<div class="tape-head">
     <span class="h-icon">${icon("metric-live")}</span> Recording
-    <span class="len"></span>
   </div>`;
 
-  if (!rec.conversation) {
+  if (!hasAny) {
     const why = String(id).startsWith("rehearsal-")
       ? "Text rehearsal — there is no audio to play."
       : "No recording for this call.";
     return `<div class="tape">${head}<div class="none">${escapeHtml(why)}</div></div>`;
   }
 
-  const src = `/api/console/calls/${encodeURIComponent(id)}/audio/conversation`;
-  return `<div class="tape">${head}
-    <div class="track conversation">
-      <audio controls preload="metadata" src="${escapeHtml(src)}"></audio>
-      <a class="grab" href="${escapeHtml(src)}" download="${escapeHtml(id)}-conversation.wav"
+  const tracks = [];
+  if (rec.inbound) tracks.push(trackRow(id, "inbound", "patient", "Patient"));
+  if (rec.outbound) tracks.push(trackRow(id, "outbound", "clinic", "Clinic"));
+  if (rec.conversation) tracks.push(trackRow(id, "conversation", "conversation", "Full call"));
+  return `<div class="tape">${head}${tracks.join("")}</div>`;
+}
+
+function trackRow(id, track, role, label) {
+  const src = `/api/console/calls/${encodeURIComponent(id)}/audio/${track}`;
+  return `<div class="track ${role}">
+    <span class="who">${escapeHtml(label)}</span>
+    <audio controls preload="metadata" src="${escapeHtml(src)}"></audio>
+    <div class="track-meta">
+      <span class="len"></span>
+      <a class="grab" href="${escapeHtml(src)}" download="${escapeHtml(id)}-${track}.wav"
          title="Download the WAV">WAV</a>
     </div>
   </div>`;
@@ -561,6 +735,7 @@ function applyEvent(message) {
     mergeSummary(summary);
     renderAgents();
     renderCalls();
+    renderRecent();
   }
   if (!event || event.call_id !== state.selected) return;
 
@@ -609,23 +784,24 @@ function applyEvent(message) {
   renderDetail();
 }
 
+function setLink(up) {
+  el("link-dot").classList.toggle("up", up);
+  el("link-label").textContent = up ? "Live" : "Offline";
+}
+
 function connect() {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${scheme}://${location.host}/api/console/stream`);
 
-  socket.onopen = () => el("link-dot").classList.add("up");
+  socket.onopen = () => setLink(true);
   socket.onclose = () => {
-    el("link-dot").classList.remove("up");
+    setLink(false);
     setTimeout(connect, 1500);
   };
   socket.onmessage = (message) => {
     const data = JSON.parse(message.data);
     if (data.type === "hello") {
       renderOverview(data.overview);
-      if (!state.selected) {
-        const first = sorted().find((call) => call.live);
-        if (first) selectCall(first.call_id);
-      }
       return;
     }
     if (data.type === "ping") {
@@ -634,7 +810,6 @@ function connect() {
     }
     if (data.type === "call_started" || data.type === "call_ended") {
       refreshOverview();
-      if (data.type === "call_started" && !state.selected) selectCall(data.call_id);
       return;
     }
     if (data.type === "event") applyEvent(data);
@@ -650,12 +825,7 @@ async function refreshOverview() {
   }
 }
 
-// ---- the one control on the page ------------------------------------
-
-function openRehearsal(open) {
-  el("rehearse-modal").classList.toggle("hidden", !open);
-  if (open) el("rehearse-turns").focus();
-}
+// ---- rehearsal -------------------------------------------------------
 
 async function runRehearsal() {
   const turns = el("rehearse-turns").value
@@ -698,8 +868,8 @@ async function runRehearsal() {
       ? `Recorded: ${submissions.map((s) => s.action).join(", ")}`
       : "Finished with no record.";
     await refreshOverview();
+    state.returnTo = "#/rehearse";
     await selectCall(body.call_id);
-    openRehearsal(false);
   } catch (error) {
     status.className = "status bad";
     status.textContent = String(error);
@@ -707,142 +877,6 @@ async function runRehearsal() {
     button.disabled = false;
   }
 }
-
-// ---- resizable panes -------------------------------------------------
-
-const LAYOUT_KEY = "elturno.ops.layout";
-
-function loadLayout() {
-  try {
-    return JSON.parse(localStorage.getItem(LAYOUT_KEY)) || {};
-  } catch (error) {
-    return {};
-  }
-}
-
-const layout = loadLayout();
-
-function saveLayout() {
-  try {
-    localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
-  } catch (error) {
-    /* storage off: the panes still resize, the browser just forgets */
-  }
-}
-
-/* Each draggable pane described once: which custom property sizes it, how to
-   read a size out of a pointer, and how small the pane on the other side is
-   allowed to get. The CSS defaults stay in charge until something is stored. */
-const PANES = {
-  detail: {
-    key: "detailWidth",
-    cssVar: "--detail-w",
-    axis: "x",
-    grow: "ArrowLeft",
-    // The pane's far edge holds still while dragging, so measuring from it is
-    // exact and needs none of main's padding arithmetic.
-    fromPointer: (event) => el("detail-pane").getBoundingClientRect().right - event.clientX,
-    current: () => el("detail-pane").getBoundingClientRect().width,
-    bounds: () => {
-      const main = document.querySelector("main");
-      const room = main.clientWidth - 36 - 11;   // side padding, then the gutter
-      return { min: 300, max: Math.max(300, room - 360) };
-    },
-  },
-  fleet: {
-    key: "fleetHeight",
-    cssVar: "--fleet-h",
-    axis: "y",
-    grow: "ArrowDown",
-    fromPointer: (event) => event.clientY - el("left-col").getBoundingClientRect().top,
-    current: () => el("agent-grid").closest(".panel").getBoundingClientRect().height,
-    bounds: () => {
-      const room = el("left-col").clientHeight - 11;
-      return { min: 120, max: Math.max(120, room - 140) };
-    },
-  },
-};
-
-function sizePane(name, px, remember = true) {
-  const pane = PANES[name];
-  const { min, max } = pane.bounds();
-  const size = Math.round(Math.min(max, Math.max(min, px)));
-  document.documentElement.style.setProperty(pane.cssVar, `${size}px`);
-  if (remember) layout[pane.key] = size;
-  return size;
-}
-
-function resetPane(name) {
-  const pane = PANES[name];
-  document.documentElement.style.removeProperty(pane.cssVar);
-  delete layout[pane.key];
-  saveLayout();
-}
-
-function applyLayout(remember = true) {
-  Object.entries(PANES).forEach(([name, pane]) => {
-    if (layout[pane.key]) sizePane(name, layout[pane.key], remember);
-  });
-}
-
-function setupSplitter(handleId, name) {
-  const handle = el(handleId);
-  const pane = PANES[name];
-  const cursor = pane.axis === "x" ? "resizing-x" : "resizing-y";
-  let dragging = false;
-
-  handle.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    dragging = true;
-    // Captured, so a fast drag that outruns the 11px handle keeps resizing
-    // instead of dropping the gesture over whatever it passed onto. Guarded
-    // because capturing a pointer that is not live throws, and a splitter that
-    // cannot capture should still drag.
-    try {
-      handle.setPointerCapture(event.pointerId);
-    } catch (error) {
-      /* no capture; the listeners below still fire */
-    }
-    handle.classList.add("dragging");
-    document.body.classList.add(cursor);
-    event.preventDefault();
-  });
-
-  handle.addEventListener("pointermove", (event) => {
-    if (dragging) sizePane(name, pane.fromPointer(event));
-  });
-
-  const stop = () => {
-    if (!dragging) return;
-    dragging = false;
-    handle.classList.remove("dragging");
-    document.body.classList.remove(cursor);
-    saveLayout();
-  };
-  handle.addEventListener("pointerup", stop);
-  handle.addEventListener("pointercancel", stop);
-  handle.addEventListener("lostpointercapture", stop);
-
-  handle.addEventListener("dblclick", () => resetPane(name));
-
-  // A separator with no keyboard is a separator half the room cannot use.
-  handle.addEventListener("keydown", (event) => {
-    const step = event.shiftKey ? 48 : 16;
-    if (event.key === pane.grow) sizePane(name, pane.current() + step);
-    else if (event.key === (pane.axis === "x" ? "ArrowRight" : "ArrowUp")) {
-      sizePane(name, pane.current() - step);
-    } else if (event.key === "Home" || event.key === "End") {
-      resetPane(name);
-      return;
-    } else return;
-    event.preventDefault();
-    saveLayout();
-  });
-}
-
-// A window that shrank must not leave a pane wider than the window; re-clamped
-// without remembering, so the size asked for survives the window coming back.
-window.addEventListener("resize", () => applyLayout(false));
 
 // ---- wiring ---------------------------------------------------------
 
@@ -866,21 +900,27 @@ el("call-filter").querySelectorAll("button").forEach((button) => {
   };
 });
 
-el("btn-rehearse").onclick = () => openRehearsal(true);
-el("rehearse-cancel").onclick = () => openRehearsal(false);
-el("rehearse-run").onclick = runRehearsal;
-el("rehearse-modal").onclick = (event) => {
-  if (event.target === el("rehearse-modal")) openRehearsal(false);
-};
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") openRehearsal(false);
+el("rehearse-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  runRehearsal();
 });
 
-setupSplitter("split-detail", "detail");
-setupSplitter("split-fleet", "fleet");
-applyLayout();
+el("btn-back").addEventListener("click", (event) => {
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
+    return;
+  }
+  event.preventDefault();
+  go(state.returnTo || "#/");
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (state.page === "call") go(state.returnTo || "#/");
+  else if (state.page === "rehearse") go("#/");
+});
 
 loadAssets().then(() => {
+  applyRoute();
   refreshOverview();
   connect();
 });

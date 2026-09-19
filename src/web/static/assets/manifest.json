@@ -57,15 +57,20 @@
       "tokens": 3428
     },
     "mark-elturno": {
+      "group": "brand",
+      "model": "arrow-2",
+      "note": "restored previous logo"
+    },
+    "mark-socket-wizard": {
       "animated": false,
-      "at": "2026-09-19T10:21:34+00:00",
-      "bytes": 1256,
+      "at": "2026-09-19T10:40:57+00:00",
+      "bytes": 2396,
       "credits": 0,
       "group": "brand",
-      "hash": "bb0c646fb5e3",
+      "hash": "13d387f2b459",
       "model": "arrow-2",
-      "request_id": "06f26323845647b0804a90c2776e6fa1",
-      "tokens": 3636
+      "request_id": "f3c979fa3c794a05856ff9e816f22ddf",
+      "tokens": 4277
     },
     "metric-interruption": {
       "animated": false,

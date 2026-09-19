@@ -192,6 +192,15 @@ BRAND = [
         "queue, in one mark.",
         style=BRAND_STYLE, width=32, height=32,
     ),
+    Asset(
+        "mark-socket-wizard", "brand",
+        "A logo mark in a rounded square badge: a stylised electrical wall "
+        "socket (two vertical slots side by side, with a small round earth pin "
+        "centred below them) and a short magic wand crossing diagonally in "
+        "front of the socket from lower left to upper right, tipped with a "
+        "simple four-pointed spark — a network socket and a wizard, in one mark.",
+        style=BRAND_STYLE, width=32, height=32,
+    ),
 ]
 
 CATALOGUE: list[Asset] = [*STATUS, *OUTCOMES, *METRICS, *UI, *BRAND]

@@ -1,4 +1,4 @@
-# El Turno — cómo está construido
+# Socket Wizard — how it is built
 
 El reto dice, con todas las letras, que el modelo de voz es *un componente* de un
 sistema que diseñas tú, no el sistema. Esa frase es la que decide esta

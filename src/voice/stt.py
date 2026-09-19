@@ -26,7 +26,7 @@ OnNotice = Callable[[str, dict], Awaitable[None]]
 
 DEEPGRAM_URL = "wss://api.deepgram.com/v1/listen"
 
-log = logging.getLogger("elturno")
+log = logging.getLogger("socketwizard")
 
 # Long enough for Deepgram's closing transcript, short enough to stay well
 # inside the submission window.

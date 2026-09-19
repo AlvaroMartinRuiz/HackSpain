@@ -9,7 +9,7 @@ makes that one — and only that one — cost again.
     python scripts/generate_assets.py --models         # what this key may use
     python scripts/generate_assets.py --group status   # draw four icons
     python scripts/generate_assets.py                  # draw whatever is missing
-    python scripts/generate_assets.py --only mark-elturno --force
+    python scripts/generate_assets.py --only mark-socket-wizard --force
     python scripts/generate_assets.py --animate        # motion inside the status icons
 
 The console works with none of this: without the files it falls back to CSS

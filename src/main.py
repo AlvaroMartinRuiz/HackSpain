@@ -1,4 +1,4 @@
-"""El Turno — the socket the clinic's calls arrive on, and the console over it."""
+"""Socket Wizard — the socket the clinic's calls arrive on, and the console over it."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
 )
-logger = logging.getLogger("elturno")
+logger = logging.getLogger("socketwizard")
 
 STATIC_DIR = Path(__file__).resolve().parent / "web" / "static"
 
@@ -75,7 +75,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await llm.aclose()
 
 
-app = FastAPI(title="El Turno · Clínica Arenal", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Socket Wizard · Clínica Arenal", version="1.0.0", lifespan=lifespan)
 app.include_router(twilio_ws.router)
 app.include_router(console_api.router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -83,14 +83,14 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 @app.get("/", include_in_schema=False)
 async def control() -> FileResponse:
-    """Every call and every agent at once."""
+    """The control site: live floor, call history, rehearsal."""
     return FileResponse(STATIC_DIR / "ops.html")
 
 
 @app.get("/console", include_in_schema=False)
 async def console() -> FileResponse:
     """The original one-call-at-a-time console, kept for the deep read of a
-    single call. The control dashboard links to it rather than replacing it."""
+    single call. The control site links to it rather than replacing it."""
     return FileResponse(STATIC_DIR / "index.html")
 
 
