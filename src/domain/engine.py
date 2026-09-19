@@ -480,6 +480,29 @@ class SchedulingEngine:
 
     # ---- rules a caller runs into -------------------------------------
 
+    def age_appropriate_specialty(
+        self, patient: dict[str, Any], specialty_id: Optional[str], now: Optional[datetime] = None
+    ) -> Optional[str]:
+        """The general specialty the patient's age requires, when a swap is needed.
+
+        A child asking for "the doctor" means paediatrics and an adult means
+        general practice; the caller should never be refused over which word the
+        model picked. Only this pair is interchangeable — gynaecology for a child
+        is a real refusal, not a routing mistake.
+        """
+        if specialty_id not in ("general_practice", "paediatrics"):
+            return None
+        now = now or now_madrid()
+        born = patient.get("date_of_birth")
+        if not born:
+            return None
+        try:
+            months = age_months(date.fromisoformat(str(born)[:10]), now.date())
+        except ValueError:
+            return None
+        correct = self.catalog.specialty_for_age(months)
+        return correct if correct and correct != specialty_id else None
+
     def check_eligibility(
         self, patient: dict[str, Any], specialty_id: str, now: Optional[datetime] = None
     ) -> Optional[str]:

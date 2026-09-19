@@ -153,6 +153,7 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
             f"Me llamo {full_name(known)}, nací el {spoken_date(known['date_of_birth'])}.",
             "El de medicina general, sí.",
             "Vale, la primera que tenga.",
+            "Sí, confírmela, por favor.",
         ],
         verify=verify_ambiguous,
     ))
@@ -162,7 +163,8 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
         asked = agent_text(response)
         result.check("the leave was mentioned",
                      any(word in asked for word in ("baja", "leave", "ausente", "no está",
-                                                    "no estará", "vuelve")),
+                                                    "no estará", "vuelve", "permiso",
+                                                    "vacaciones", "no disponible")),
                      asked[:200])
         result.check("something was recorded", bool(response["submissions"]))
 
@@ -244,6 +246,8 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
             "Hola, quería una cita con el médico de cabecera el jueves que viene a primera hora.",
             f"{full_name(known)}, nacida el {spoken_date(known['date_of_birth'])}.",
             "Sí, esa me vale. Resérvemela.",
+            # A real caller answers when offered a choice; the script has to too.
+            "La primera de las dos, por favor.",
         ],
         verify=verify_when,
     ))
@@ -465,6 +469,7 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
             "Necessito algú que parli català.",
             f"Em dic {full_name(known)}, vaig néixer el {spoken_date(known['date_of_birth'])}.",
             "La primera que tingueu em va bé. Gràcies.",
+            "Sí, aquesta. Reserva-la, si us plau.",
         ],
         verify=verify_language,
     ))

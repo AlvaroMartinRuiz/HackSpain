@@ -29,6 +29,7 @@ class Agent:
             {"role": "system", "content": build_system_prompt(session.catalog, session.from_number)}
         ]
         self._buffer = ""
+        self._pending_briefings: list[str] = []
 
     # ---- conversation -------------------------------------------------
 
@@ -77,6 +78,10 @@ class Agent:
             for call in completion.tool_calls:
                 await self._run_tool(call.id, call.name, call.parsed_arguments())
 
+            for briefing in self._pending_briefings:
+                self.messages.append({"role": "system", "content": briefing})
+            self._pending_briefings.clear()
+
             if round_index == settings.llm_max_tool_rounds - 1:
                 await self.session.record("error", {
                     "where": "tool_loop", "detail": "hit the tool round cap",
@@ -92,7 +97,7 @@ class Agent:
         self._buffer = ""
         completion: Optional[Completion] = None
 
-        async for kind, value in self.llm.stream(self.messages, self.tools.schemas()):
+        async for kind, value in self.llm.stream(self._sound_history(), self.tools.schemas()):
             if kind == "text":
                 self._buffer += value
                 for sentence in self._drain():
@@ -162,8 +167,12 @@ class Agent:
     # ---- housekeeping -------------------------------------------------
 
     async def brief_on_patient(self, patient: dict[str, Any], context: dict[str, Any]) -> None:
-        """Drop the chart into the conversation the moment it is opened."""
-        self.messages.append({"role": "system", "content": chart_briefing(patient, context)})
+        """Queue the chart, to land once the round's tool results are all in.
+
+        Appending it here would wedge a system message between an assistant's
+        tool_calls and their results, which strict gateways reject outright.
+        """
+        self._pending_briefings.append(chart_briefing(patient, context))
 
     def note_interruption(self, spoken_so_far: str) -> None:
         """Record only what the caller actually heard before cutting in."""
@@ -171,6 +180,47 @@ class Agent:
             if message.get("role") == "assistant" and message.get("content"):
                 message["content"] = spoken_so_far or message["content"]
                 break
+
+    def _sound_history(self) -> list[dict[str, Any]]:
+        """Guarantee every tool_calls message is followed by exactly its results.
+
+        One stray message in between costs the rest of the call, so the shape is
+        enforced on the way out rather than trusted.
+        """
+        out: list[dict[str, Any]] = []
+        index = 0
+        while index < len(self.messages):
+            message = self.messages[index]
+            calls = message.get("tool_calls") if message.get("role") == "assistant" else None
+            if not calls:
+                out.append(message)
+                index += 1
+                continue
+
+            out.append(message)
+            wanted = [call["id"] for call in calls]
+            results: dict[str, dict[str, Any]] = {}
+            strays: list[dict[str, Any]] = []
+            index += 1
+            while index < len(self.messages) and len(results) < len(wanted):
+                following = self.messages[index]
+                if following.get("role") == "tool":
+                    call_id = following.get("tool_call_id")
+                    if call_id in wanted:
+                        results[call_id] = following
+                    # A tool result for an unknown id is dropped.
+                else:
+                    strays.append(following)
+                index += 1
+
+            for call_id in wanted:
+                out.append(results.get(call_id) or {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": '{"error": "tool produced no result"}',
+                })
+            out.extend(strays)
+        return out
 
     def _trim(self) -> None:
         if len(self.messages) <= MAX_HISTORY_MESSAGES:

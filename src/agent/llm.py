@@ -56,6 +56,7 @@ class LLMClient:
             headers={
                 "Authorization": f"Bearer {settings.llm_api_key}",
                 "Content-Type": "application/json",
+                **settings.llm_extra_headers,
             },
             timeout=httpx.Timeout(30.0, connect=6.0),
             limits=httpx.Limits(max_connections=60, max_keepalive_connections=30),

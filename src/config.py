@@ -36,6 +36,17 @@ def _float(name: str, default: float) -> float:
         return default
 
 
+def _headers(name: str) -> dict:
+    """Parse "Key: value, Other: value" into headers, tolerating stray spaces."""
+    raw = os.getenv(name) or ""
+    headers: dict[str, str] = {}
+    for part in raw.split(","):
+        key, sep, value = part.partition(":")
+        if sep and key.strip() and value.strip():
+            headers[key.strip()] = value.strip()
+    return headers
+
+
 def _bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None or raw == "":
@@ -76,6 +87,8 @@ class Settings:
     llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", default="gpt-4o"))
     llm_temperature: float = field(default_factory=lambda: _float("LLM_TEMPERATURE", 0.2))
     llm_max_tool_rounds: int = field(default_factory=lambda: _int("LLM_MAX_TOOL_ROUNDS", 6))
+    # Gateways often need one of their own, e.g. Cloudflare's cf-aig-gateway-id.
+    llm_extra_headers: dict = field(default_factory=lambda: _headers("LLM_EXTRA_HEADERS"))
 
     # Text to speech
     tts_provider: str = field(default_factory=lambda: _env("TTS_PROVIDER", default="elevenlabs").lower())

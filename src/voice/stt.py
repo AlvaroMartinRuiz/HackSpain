@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import urllib.parse
 from typing import Awaitable, Callable, Optional
 
@@ -23,6 +24,12 @@ OnFinal = Callable[[str, Optional[str]], Awaitable[None]]
 OnSpeechStart = Callable[[], Awaitable[None]]
 
 DEEPGRAM_URL = "wss://api.deepgram.com/v1/listen"
+
+log = logging.getLogger("elturno")
+
+# Long enough for Deepgram's closing transcript, short enough to stay well
+# inside the submission window.
+DRAIN_TIMEOUT_S = 2.0
 
 
 class DeepgramTranscriber:
@@ -83,11 +90,17 @@ class DeepgramTranscriber:
             except Exception:
                 pass
         if self._reader is not None:
-            self._reader.cancel()
+            # Deepgram sends the closing transcript after CloseStream, so the
+            # caller's last words are lost if we cancel straight away.
             try:
-                await self._reader
-            except (asyncio.CancelledError, Exception):
-                pass
+                await asyncio.wait_for(self._reader, timeout=DRAIN_TIMEOUT_S)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                self._reader.cancel()
+                try:
+                    await self._reader
+                except (asyncio.CancelledError, Exception):
+                    pass
+        await self._flush()
         if self._socket is not None:
             try:
                 await self._socket.close()
@@ -105,8 +118,10 @@ class DeepgramTranscriber:
                 await self._handle(message)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            return
+        except Exception as exc:
+            # Dying quietly here would leave the agent deaf for the rest of the
+            # call with nothing to show why.
+            log.exception("deepgram reader stopped: %s: %s", type(exc).__name__, exc)
 
     async def _handle(self, message: dict) -> None:
         kind = message.get("type")
