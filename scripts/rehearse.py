@@ -142,6 +142,8 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
             f"Soy {full_name(known)}.",
             f"Nací el {spoken_date(known['date_of_birth'])}.",
             "Perfecto, el primero que tenga me sirve. Confírmemelo.",
+            # Booking needs an explicit yes to the exact option read back.
+            "Sí, esa me va bien. Resérvemela, por favor.",
         ],
         verify=verify_booking,
     ))

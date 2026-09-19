@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
 import time
 from typing import Any, Awaitable, Callable, Optional
 
@@ -329,6 +330,11 @@ class CallSession:
     async def say(self, text: str, first: bool = False) -> None:
         text = (text or "").strip()
         if not text:
+            return
+        if _PLACEHOLDER.search(text):
+            # The model filled a slot it did not have ("¿Hablo con [nombre del
+            # paciente]?"). Saying it aloud is worse than saying nothing.
+            await self.record("decision", {"stage": "placeholder_suppressed", "text": text})
             return
         self._disarm_silence()
         # Logged when decided rather than when finished playing, so the console
@@ -686,6 +692,10 @@ class CallSession:
             result = await self.client.submit(action, payload)
         self.submissions.append(result)
         return result
+
+
+# "[nombre del paciente]", "[full name]": a template slot, never a real word.
+_PLACEHOLDER = re.compile(r"\[[^\]\d]{3,}\]")
 
 
 # Transcribers disagree: Deepgram says "es", Scribe says "spa", and "spa"[:2]

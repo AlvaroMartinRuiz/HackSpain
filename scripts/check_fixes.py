@@ -268,6 +268,14 @@ async def tool_checks() -> None:
     check("a Catalan caller is offered only Catalan-speaking doctors",
           bool(offered) and offered <= speakers, sorted(offered))
 
+    section("A template slot is never spoken")
+    session, _ = new_session(text_mode=True)
+    await session.say("¿Hablo con [nombre del paciente]?")
+    await session.say("¿Hablo con Rosa Delgado?")
+    spoken = agent_lines(session)
+    check("the placeholder line is suppressed, the real one is not",
+          spoken == ["¿Hablo con Rosa Delgado?"], spoken)
+
     section("Safety net")
     session, _ = new_session(text_mode=True)
     check("nobody looked up: out_of_scope", session.agent.tools.fallback_reason() == "out_of_scope")
