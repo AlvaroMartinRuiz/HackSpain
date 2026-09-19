@@ -15,4 +15,5 @@ build/
 # Call history is per-machine; the clinic catalogue is committed on purpose.
 data/calls.db
 data/calls.db-*
+data/recordings/
 

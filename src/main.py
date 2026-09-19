@@ -91,6 +91,8 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "endpoint": "/ws",
+        "public_ws_url": settings.public_ws_url or None,
+        "public_console_url": settings.public_console_url or None,
         "platform_configured": settings.configured,
         "voice_ready": not settings.missing_voice_keys(),
         "missing_keys": settings.missing_voice_keys(),

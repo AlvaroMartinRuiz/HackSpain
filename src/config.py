@@ -69,6 +69,8 @@ class Settings:
     # Server
     port: int = field(default_factory=lambda: _int("PORT", 7860))
     host: str = field(default_factory=lambda: _env("HOST", default="0.0.0.0"))
+    public_ws_url: str = field(default_factory=lambda: _env("PUBLIC_WS_URL"))
+    public_console_url: str = field(default_factory=lambda: _env("PUBLIC_CONSOLE_URL"))
 
     # Speech to text
     stt_provider: str = field(default_factory=lambda: _env("STT_PROVIDER", default="deepgram").lower())
@@ -91,7 +93,11 @@ class Settings:
     llm_extra_headers: dict = field(default_factory=lambda: _headers("LLM_EXTRA_HEADERS"))
 
     # Text to speech
-    tts_provider: str = field(default_factory=lambda: _env("TTS_PROVIDER", default="elevenlabs").lower())
+    tts_provider: str = field(default_factory=lambda: _env("TTS_PROVIDER", default="deepgram").lower())
+    # Peninsular Spanish, customer-service voice, and it codeswitches to English.
+    deepgram_tts_model: str = field(
+        default_factory=lambda: _env("DEEPGRAM_TTS_MODEL", default="aura-2-carina-es")
+    )
     elevenlabs_api_key: str = field(default_factory=lambda: _env("ELEVENLABS_API_KEY"))
     elevenlabs_voice_id: str = field(
         default_factory=lambda: _env("ELEVENLABS_VOICE_ID", default="EXAVITQu4vr4xnSDxMaL")
@@ -132,6 +138,8 @@ class Settings:
             missing.append("DEEPGRAM_API_KEY")
         if not self.llm_api_key:
             missing.append("LLM_API_KEY")
+        if self.tts_provider == "deepgram" and not self.deepgram_api_key:
+            missing.append("DEEPGRAM_API_KEY (tts)")
         if self.tts_provider == "elevenlabs" and not self.elevenlabs_api_key:
             missing.append("ELEVENLABS_API_KEY")
         if self.tts_provider == "cartesia" and not self.cartesia_api_key:

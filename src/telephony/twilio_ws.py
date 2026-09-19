@@ -82,9 +82,10 @@ async def media_stream(websocket: WebSocket) -> None:
                 continue
 
             if event == "media" and session is not None:
-                payload = (message.get("media") or {}).get("payload")
+                media = message.get("media") or {}
+                payload = media.get("payload")
                 if payload:
-                    await session.on_media(payload)
+                    await session.on_media(payload, track=media.get("track"))
                 continue
 
             if event == "stop" and session is not None:

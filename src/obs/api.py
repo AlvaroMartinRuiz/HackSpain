@@ -8,12 +8,14 @@ from typing import Any, Optional
 import uuid
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from src.agent.llm import LLMClient
 from src.config import settings
 from src.domain.catalog import Catalog
 from src.obs.store import store
+from src.obs import tape
 from src.platform_api.client import PlatformClient
 from src.voice.tts import active_provider_name
 
@@ -33,7 +35,12 @@ async def overview() -> dict[str, Any]:
     missing = settings.missing_voice_keys()
     return {
         "clinic": _catalog.clinic_name if _catalog else None,
-        "endpoint": {"port": settings.port, "path": "/ws"},
+        "endpoint": {
+            "port": settings.port,
+            "path": "/ws",
+            "public_ws_url": settings.public_ws_url or None,
+            "public_console_url": settings.public_console_url or None,
+        },
         "providers": {
             "stt": settings.stt_provider if settings.deepgram_api_key else "whisper (fallback)",
             "stt_model": settings.deepgram_model,
@@ -44,19 +51,40 @@ async def overview() -> dict[str, Any]:
         "missing_keys": missing,
         "stats": store.aggregate(),
         "live": [call.summary() for call in store.live_calls()],
-        "recent": [call.summary() for call in store.recent_calls()[:20]],
+        "recent": _recent_for_console(),
     }
+
+
+def _recent_for_console() -> list[dict[str, Any]]:
+    recent = [call.summary() for call in store.recent_calls()[:20]]
+    seen = {row["call_id"] for row in recent}
+    for row in store.history(20):
+        if row["call_id"] not in seen:
+            recent.append(row)
+            seen.add(row["call_id"])
+        if len(recent) >= 20:
+            break
+    return recent
 
 
 @router.get("/calls/{call_id}")
 async def call_detail(call_id: str) -> dict[str, Any]:
+    recordings = tape.available(call_id)
     call = store.get(call_id)
     if call is not None:
-        return call.detail()
+        return {**call.detail(), "recordings": recordings}
     events = store.replay(call_id)
     if not events:
         raise HTTPException(status_code=404, detail="no such call")
-    return {"call_id": call_id, "replay_only": True, "events": events}
+    return {"call_id": call_id, "replay_only": True, "events": events, "recordings": recordings}
+
+
+@router.get("/calls/{call_id}/audio/{track}")
+async def call_audio(call_id: str, track: str) -> FileResponse:
+    path = tape.wav_path(call_id, track)
+    if path is None:
+        raise HTTPException(status_code=404, detail="no recording")
+    return FileResponse(path, media_type="audio/wav", filename=f"{call_id}-{track}.wav")
 
 
 @router.get("/calls/{call_id}/replay")

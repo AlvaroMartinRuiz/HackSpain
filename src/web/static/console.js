@@ -27,7 +27,10 @@ function renderOverview(overview) {
     `<span class="pill">escucha <b>${escapeHtml(p.stt)}</b></span>`,
     `<span class="pill">modelo <b>${escapeHtml(p.llm)}</b></span>`,
     `<span class="pill">voz <b>${escapeHtml(p.tts)}</b></span>`,
-    `<span class="pill">endpoint <b>wss://…:${overview.endpoint.port}${overview.endpoint.path}</b></span>`,
+    `<span class="pill">endpoint <b>${escapeHtml(
+      (overview.endpoint && overview.endpoint.public_ws_url)
+        || `wss://…:${overview.endpoint.port}${overview.endpoint.path}`
+    )}</b></span>`,
   ];
   if (!overview.ready) {
     pills.push(`<span class="pill warn">faltan claves: <b>${escapeHtml((overview.missing_keys || []).join(", "))}</b></span>`);
@@ -136,11 +139,30 @@ function renderDetail() {
       ${detail.turns ?? 0} turnos · ${detail.tool_calls ?? 0} herramientas ·
       ${detail.clinic_calls ?? 0} consultas · ${detail.duration_s ?? 0}s</div>
     <div class="chips">${chips.join("")}</div>
-    ${patient.note ? `<div class="note">${escapeHtml(patient.note)}</div>` : ""}`;
+    ${patient.note ? `<div class="note">${escapeHtml(patient.note)}</div>` : ""}
+    ${tapePlayers(detail)}`;
 
   el("transcript").innerHTML = (detail.transcript || []).map(turnRow).join("");
   scrollTranscript();
   renderTabs();
+}
+
+function tapePlayers(detail) {
+  const rec = detail.recordings || {};
+  const id = detail.call_id;
+  if (!id || (!rec.inbound && !rec.outbound)) return "";
+  const parts = [];
+  if (rec.inbound) {
+    parts.push(`<label>Paciente (lo que nos llegó)
+      <audio controls preload="metadata" src="/api/console/calls/${encodeURIComponent(id)}/audio/inbound"></audio>
+    </label>`);
+  }
+  if (rec.outbound) {
+    parts.push(`<label>Agente (lo que enviamos)
+      <audio controls preload="metadata" src="/api/console/calls/${encodeURIComponent(id)}/audio/outbound"></audio>
+    </label>`);
+  }
+  return `<div class="tape">${parts.join("")}</div>`;
 }
 
 function turnRow(turn) {

@@ -22,6 +22,7 @@ from src.voice.vad import EnergyVAD
 OnPartial = Callable[[str], Awaitable[None]]
 OnFinal = Callable[[str, Optional[str]], Awaitable[None]]
 OnSpeechStart = Callable[[], Awaitable[None]]
+OnNotice = Callable[[str, dict], Awaitable[None]]
 
 DEEPGRAM_URL = "wss://api.deepgram.com/v1/listen"
 
@@ -38,15 +39,19 @@ class DeepgramTranscriber:
         on_partial: OnPartial,
         on_final: OnFinal,
         on_speech_started: Optional[OnSpeechStart] = None,
+        on_notice: Optional[OnNotice] = None,
     ) -> None:
         self.on_partial = on_partial
         self.on_final = on_final
         self.on_speech_started = on_speech_started
+        self.on_notice = on_notice
         self._socket = None
         self._reader: Optional[asyncio.Task] = None
+        self._keepalive: Optional[asyncio.Task] = None
         self._pending: list[str] = []
         self._language: Optional[str] = None
         self._closed = False
+        self.bytes_sent = 0
 
     def _url(self) -> str:
         params = {
@@ -73,17 +78,22 @@ class DeepgramTranscriber:
         except TypeError:  # websockets < 14 named it differently
             self._socket = await websockets.connect(self._url(), extra_headers=headers)
         self._reader = asyncio.create_task(self._read())
+        self._keepalive = asyncio.create_task(self._ping())
 
     async def push(self, ulaw_frame: bytes) -> None:
         if self._socket is None or self._closed:
             return
         try:
             await self._socket.send(ulaw_frame)
-        except Exception:
+            self.bytes_sent += len(ulaw_frame)
+        except Exception as exc:
             self._closed = True
+            log.warning("deepgram push failed after %s bytes: %s", self.bytes_sent, exc)
 
     async def finish(self) -> None:
         self._closed = True
+        if self._keepalive is not None:
+            self._keepalive.cancel()
         if self._socket is not None:
             try:
                 await self._socket.send(json.dumps({"type": "CloseStream"}))
@@ -122,9 +132,46 @@ class DeepgramTranscriber:
             # Dying quietly here would leave the agent deaf for the rest of the
             # call with nothing to show why.
             log.exception("deepgram reader stopped: %s: %s", type(exc).__name__, exc)
+            if self.on_notice is not None:
+                await self.on_notice("deepgram_reader_stopped", {
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "bytes_sent": self.bytes_sent,
+                })
+
+    async def _ping(self) -> None:
+        """Deepgram drops a listen socket after ~10 s of silence."""
+        try:
+            while not self._closed and self._socket is not None:
+                await asyncio.sleep(5)
+                if self._closed or self._socket is None:
+                    return
+                try:
+                    await self._socket.send(json.dumps({"type": "KeepAlive"}))
+                except Exception:
+                    return
+        except asyncio.CancelledError:
+            return
 
     async def _handle(self, message: dict) -> None:
         kind = message.get("type")
+
+        if kind in {"Error", "Warning"}:
+            log.error("deepgram %s: %s", kind, message)
+            if self.on_notice is not None:
+                await self.on_notice("deepgram_error", {
+                    "kind": kind,
+                    "message": str(message.get("message") or message.get("description") or message)[:400],
+                })
+            return
+
+        if kind == "Metadata":
+            if self.on_notice is not None:
+                await self.on_notice("deepgram_meta", {
+                    "duration": message.get("duration"),
+                    "channels": message.get("channels"),
+                    "request_id": message.get("request_id"),
+                })
+            return
 
         if kind == "SpeechStarted":
             if self.on_speech_started is not None:
@@ -230,10 +277,11 @@ def build_transcriber(
     on_partial: OnPartial,
     on_final: OnFinal,
     on_speech_started: Optional[OnSpeechStart] = None,
+    on_notice: Optional[OnNotice] = None,
 ):
     provider = settings.stt_provider
     if provider == "deepgram" and settings.deepgram_api_key:
-        return DeepgramTranscriber(on_partial, on_final, on_speech_started)
+        return DeepgramTranscriber(on_partial, on_final, on_speech_started, on_notice)
     return WhisperTranscriber(on_partial, on_final, on_speech_started)
 
 

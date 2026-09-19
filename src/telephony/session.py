@@ -18,6 +18,7 @@ from src.config import settings
 from src.domain.catalog import Catalog
 from src.domain.engine import SchedulingEngine
 from src.obs.store import CallStore
+from src.obs import tape
 from src.platform_api.client import PlatformClient, SubmitResult
 from src.voice import audio
 from src.voice.stt import build_transcriber
@@ -29,6 +30,8 @@ Sender = Callable[[dict[str, Any]], Awaitable[None]]
 MIN_BARGE_IN_CHARS = 7
 MIN_SPEAKING_MS_BEFORE_BARGE_IN = 350
 PLAYBACK_LEAD_S = 0.20
+# ~3 minutes of µ-law; the harness cuts the call before this anyway.
+TAPE_CAP_BYTES = 8000 * 180
 
 
 class CallSession:
@@ -61,6 +64,7 @@ class CallSession:
             on_partial=self._on_partial,
             on_final=self._on_final,
             on_speech_started=self._on_speech_started,
+            on_notice=self._on_stt_notice,
         )
 
         self.seen_patients: list[dict[str, Any]] = []
@@ -78,8 +82,15 @@ class CallSession:
         self._turn_lock = asyncio.Lock()
         self._pending_turn: Optional[str] = None
         self._closed = False
+        self._sealing = False
+        self._frozen = False
         self._started_at = time.monotonic()
         self._last_partial_at = 0.0
+        self._media_frames = 0
+        self._media_bytes = 0
+        self._media_by_track: dict[str, int] = {}
+        self._tape: dict[str, bytearray] = {"inbound": bytearray(), "outbound": bytearray()}
+        self._tape_saved = False
 
     # ---- lifecycle ----------------------------------------------------
 
@@ -93,18 +104,62 @@ class CallSession:
                 asyncio.create_task(self._deadline_loop(), name=f"deadline:{self.call_id}"),
             ]
         await self.record("decision", {"stage": "greeting", "why": "call connected"})
-        await self.agent.greet()
+        # Do not await the greeting here: the socket still has to read inbound
+        # audio while the first sentence is synthesised.
+        self._tasks.append(asyncio.create_task(self._greet(), name=f"greet:{self.call_id}"))
 
-    async def on_media(self, payload: str) -> None:
+    async def _greet(self) -> None:
+        try:
+            await self.agent.greet()
+        except Exception as exc:
+            await self.record("error", {"where": "greet", "detail": f"{type(exc).__name__}: {exc}"})
+
+    async def on_media(self, payload: str, track: Optional[str] = None) -> None:
         if self.transcriber is None:
             return
         try:
             chunk = base64.b64decode(payload)
         except (ValueError, TypeError):
             return
+        if not chunk:
+            return
+        # Prosper's "inbound" should be the patient, but the last practice
+        # delivered 19 s of inbound and Deepgram heard silence — so we transcribe
+        # every track and drop echoes of our own speech later.
+        key = track or "inbound"
+        self._media_by_track[key] = self._media_by_track.get(key, 0) + 1
+        self._media_frames += 1
+        self._media_bytes += len(chunk)
+        buf = self._tape.setdefault(key, bytearray())
+        if len(buf) < TAPE_CAP_BYTES:
+            buf.extend(chunk)
+        if self._media_frames == 1:
+            await self.record("media_started", {
+                "track": track, "frame_bytes": len(chunk),
+            })
         await self.transcriber.push(chunk)
 
+    async def _on_stt_notice(self, kind: str, payload: dict[str, Any]) -> None:
+        await self.record(kind, payload)
+
+    def _save_tape(self) -> None:
+        if self._tape_saved:
+            return
+        self._tape_saved = True
+        for track, buf in self._tape.items():
+            try:
+                tape.save(self.call_id, track, bytes(buf))
+            except Exception:
+                pass
+
     async def on_stop(self) -> None:
+        self._save_tape()
+        await self.record("media_stats", {
+            "frames": self._media_frames,
+            "bytes": self._media_bytes,
+            "by_track": self._media_by_track,
+            "deepgram_bytes": getattr(self.transcriber, "bytes_sent", None),
+        })
         if self.transcriber is not None:
             await self.transcriber.finish()
 
@@ -117,16 +172,25 @@ class CallSession:
         if self._closed:
             return
         self._closed = True
+        # From here only the safety-net NO_ACTION may be written. An in-flight
+        # BOOK after that would leave [NO_ACTION, BOOK] and fail the case.
+        self._sealing = True
 
+        current = asyncio.current_task()
         for task in self._tasks:
-            task.cancel()
+            if task is not current:
+                task.cancel()
         for task in self._tasks:
+            if task is current:
+                continue
             try:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
 
         await self._guarantee_submission()
+        self._frozen = True
+        self._save_tape()
 
         if self.transcriber is not None:
             try:
@@ -159,7 +223,7 @@ class CallSession:
         except asyncio.CancelledError:
             raise
         await self.record("error", {"where": "deadline", "detail": "hard call limit reached"})
-        await self._guarantee_submission()
+        await self.finalize("timed_out")
 
     # ---- speaking -----------------------------------------------------
 
@@ -184,6 +248,11 @@ class CallSession:
         started = time.perf_counter()
         first_byte_ms: Optional[int] = None
         total = 0
+        # Count as speaking from the moment we ask the voice, not when the
+        # first frame hits the line — otherwise barge-in is deaf during TTS.
+        if self._speaking_since is None:
+            self._speaking_since = time.monotonic()
+            self._current_text = text
         try:
             async for chunk in self.synthesizer.stream(text):
                 if generation != self._generation:
@@ -243,6 +312,9 @@ class CallSession:
         await self.record("agent_turn_end", {"text": text})
 
     async def _send_media(self, frame: bytes) -> None:
+        out = self._tape["outbound"]
+        if len(out) < TAPE_CAP_BYTES:
+            out.extend(frame)
         await self._send({
             "event": "media",
             "streamSid": self.stream_sid,
@@ -271,6 +343,14 @@ class CallSession:
         keep = max(1, int(len(words) * fraction))
         return " ".join(words[:keep])
 
+    def _looks_like_echo(self, text: str) -> bool:
+        """Skip a transcript that is just our own voice coming back on the line."""
+        heard = text.lower().strip()
+        said = (self._current_text or "").lower().strip()
+        if len(heard) < 12 or not said:
+            return False
+        return heard in said or said in heard
+
     @property
     def is_speaking(self) -> bool:
         return self._speaking_since is not None
@@ -288,6 +368,8 @@ class CallSession:
 
         if not settings.barge_in or not self.is_speaking:
             return
+        if self._looks_like_echo(text):
+            return
         speaking_ms = (now - (self._speaking_since or now)) * 1000
         if speaking_ms < MIN_SPEAKING_MS_BEFORE_BARGE_IN:
             return
@@ -296,6 +378,12 @@ class CallSession:
         await self._interrupt(text.strip())
 
     async def _on_final(self, text: str, language: Optional[str]) -> None:
+        text = (text or "").strip()
+        if not text:
+            return
+        if self._looks_like_echo(text):
+            await self.record("stt_echo", {"text": text})
+            return
         await self.record("stt_final", {"text": text, "language": language})
         if self._closed:
             return
@@ -341,6 +429,10 @@ class CallSession:
 
     async def submit(self, action: str, payload: dict[str, Any]) -> SubmitResult:
         """Send one action, and never send the same one twice."""
+        if self._frozen or (self._sealing and action != "no_action"):
+            result = SubmitResult(action, payload, 0, {"skipped": "record already closed"}, 0)
+            await self.record("submit_skipped", result.as_dict())
+            return result
         key = f"{action}:{sorted(payload.items())!r}"
         if key in self._submitted_keys:
             existing = next(
