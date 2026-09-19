@@ -71,6 +71,9 @@ class Settings:
     host: str = field(default_factory=lambda: _env("HOST", default="0.0.0.0"))
     public_ws_url: str = field(default_factory=lambda: _env("PUBLIC_WS_URL"))
     public_console_url: str = field(default_factory=lambda: _env("PUBLIC_CONSOLE_URL"))
+    # Reload restarts the server whenever a file is saved, which during a Run All
+    # drops every live socket at once. Off unless asked for.
+    reload: bool = field(default_factory=lambda: _bool("RELOAD", False))
 
     # Speech to text
     stt_provider: str = field(default_factory=lambda: _env("STT_PROVIDER", default="deepgram").lower())
@@ -142,6 +145,9 @@ class Settings:
             missing.append("DEEPGRAM_API_KEY")
         if not self.llm_api_key:
             missing.append("LLM_API_KEY")
+        if self.tts_provider == "deepgram" and not self.deepgram_api_key:
+            if "DEEPGRAM_API_KEY" not in missing:
+                missing.append("DEEPGRAM_API_KEY")
         if self.tts_provider == "elevenlabs" and not self.elevenlabs_api_key:
             missing.append("ELEVENLABS_API_KEY")
         if self.tts_provider == "cartesia" and not self.cartesia_api_key:

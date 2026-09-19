@@ -33,6 +33,16 @@ PLAYBACK_LEAD_S = 0.20
 # ~3 minutes of µ-law; the harness cuts the call before this anyway.
 TAPE_CAP_BYTES = 8000 * 180
 
+# Spent recovering the caller's last words once the socket is gone. The window
+# closes 30 s after that and a retried submit can take 19 of them, so this stays
+# small enough that the record is never what runs out of time.
+RECOVERY_BUDGET_S = 6.0
+
+# Grace for a turn still in flight when the hard limit lands, inside the ten
+# seconds between our own limit and the harness cutting the call at three
+# minutes.
+DEADLINE_SETTLE_S = 5.0
+
 
 class CallSession:
     def __init__(
@@ -79,8 +89,12 @@ class CallSession:
         self._current_text = ""
         self._current_sent = 0
         self._current_total = 0
+        self._synthesizing = 0
         self._turn_lock = asyncio.Lock()
         self._pending_turn: Optional[str] = None
+        # Two flags, not one: the door shuts to new turns only after the last
+        # one has been recovered, but finalize still must not run twice.
+        self._closing = False
         self._closed = False
         self._sealing = False
         self._frozen = False
@@ -170,8 +184,11 @@ class CallSession:
 
     async def finalize(self, status: str = "finished") -> None:
         """Close the call, and never leave its record empty."""
-        if self._closed:
+        if self._closing:
             return
+        self._closing = True
+
+        await self._recover_last_turn()
         self._closed = True
         # From here only the safety-net NO_ACTION may be written. An in-flight
         # BOOK after that would leave [NO_ACTION, BOOK] and fail the case.
@@ -205,6 +222,35 @@ class CallSession:
         self.store.close_call(self.call_id, status)
         await self.store.announce({"type": "call_ended", "call_id": self.call_id})
 
+    async def _recover_last_turn(self) -> None:
+        """Take back whatever the transcriber is still holding, before deciding.
+
+        Deepgram sends its closing transcript after CloseStream, and when a
+        socket drops without a `stop` that sentence is usually the caller's
+        confirmation. Draining it here rather than after `_guarantee_submission`
+        is what lets it still become a booking instead of arriving behind a
+        NO_ACTION that has already gone out.
+        """
+        if self.transcriber is None:
+            return
+        try:
+            await asyncio.wait_for(self._drain_and_settle(), timeout=RECOVERY_BUDGET_S)
+        except (asyncio.TimeoutError, Exception):
+            # Anything still outstanding is not worth the submission window.
+            pass
+
+    async def _drain_and_settle(self) -> None:
+        assert self.transcriber is not None
+        # finish() runs the recovered turn itself, unless one was already in
+        # flight — in which case that turn picks it up and the lock is the wait.
+        await self.transcriber.finish()
+        await self._settled()
+
+    async def _settled(self) -> None:
+        """Return once no turn is being worked on."""
+        async with self._turn_lock:
+            pass
+
     async def _guarantee_submission(self) -> None:
         """Silence is always wrong, so something is always reported."""
         if any(result.accepted or result.duplicate for result in self.submissions):
@@ -224,6 +270,12 @@ class CallSession:
         except asyncio.CancelledError:
             raise
         await self.record("error", {"where": "deadline", "detail": "hard call limit reached"})
+        # A turn already running may still produce the real action, so give it
+        # a moment rather than racing it to a timed-out NO_ACTION.
+        try:
+            await asyncio.wait_for(self._settled(), timeout=DEADLINE_SETTLE_S)
+        except (asyncio.TimeoutError, Exception):
+            pass
         await self.finalize("timed_out")
 
     # ---- speaking -----------------------------------------------------
@@ -243,7 +295,14 @@ class CallSession:
             generation, text, language = await self._say_queue.get()
             if generation != self._generation:
                 continue
-            await self._synthesize(generation, text, language)
+            # Counted, because between taking the text off the queue and the
+            # first frame reaching the wire neither queue holds anything and the
+            # agent would otherwise look idle for the length of a synthesis.
+            self._synthesizing += 1
+            try:
+                await self._synthesize(generation, text, language)
+            finally:
+                self._synthesizing -= 1
 
     async def _synthesize(self, generation: int, text: str, language: str) -> None:
         started = time.perf_counter()
@@ -310,6 +369,11 @@ class CallSession:
         if self._speaking_since is None:
             return
         self._speaking_since = None
+        # Cleared so a later interruption cannot attribute this turn's words to
+        # the one being synthesised.
+        self._current_text = ""
+        self._current_sent = 0
+        self._current_total = 0
         await self.record("agent_turn_end", {"text": text})
 
     async def _send_media(self, frame: bytes) -> None:
@@ -337,6 +401,9 @@ class CallSession:
 
     def _spoken_so_far(self) -> str:
         """Cut the current sentence where the audio actually stopped."""
+        if self._speaking_since is None:
+            # Cut off before playback began, so none of it reached the caller.
+            return ""
         if not self._current_text or self._current_total <= 0:
             return self._current_text
         fraction = min(1.0, self._current_sent / self._current_total)
@@ -354,7 +421,19 @@ class CallSession:
 
     @property
     def is_speaking(self) -> bool:
-        return self._speaking_since is not None
+        """Playing, or already committed to playing.
+
+        Synthesis takes a few hundred milliseconds, and a caller who starts
+        talking inside that gap has to be able to stop us. Waiting for the first
+        frame means the agent begins speaking over someone already mid-sentence
+        and only notices afterwards.
+        """
+        return (
+            self._speaking_since is not None
+            or self._synthesizing > 0
+            or not self._say_queue.empty()
+            or not self._audio_queue.empty()
+        )
 
     # ---- listening ----------------------------------------------------
 

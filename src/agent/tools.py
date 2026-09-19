@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Optional
 
 from src.domain.engine import Slot
+from src.domain.identity import normalize_text
 from src.domain.outcomes import ALL_REASONS, is_valid_reason
 from src.domain.timeref import format_slot, now_madrid
 from src.domain.triage import triage
@@ -97,14 +98,20 @@ SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "find_appointments",
             "description": (
-                "Real availability for the patient whose chart is open. Returns numbered options "
-                "you can read out, or the rule that forbids it. Say the time phrase exactly as "
-                "the caller said it in `when` — it is resolved against the clock in Madrid. "
-                "Never booked for the same day."
+                "Real availability for one patient. Returns numbered options you can read out, "
+                "or the rule that forbids it. Say the time phrase exactly as the caller said it "
+                "in `when` — it is resolved against the clock in Madrid. Never booked for the "
+                "same day. Name the patient: slots carry their appointment type and their plan, "
+                "so searching under the wrong person returns the wrong answer."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "patient_id": {
+                        "type": "string",
+                        "description": "Who this is for, as returned by open_chart. The caller is "
+                                       "often not the patient, and a call can involve two people.",
+                    },
                     "specialty_id": {
                         "type": "string",
                         "enum": ["general_practice", "paediatrics", "dermatology",
@@ -129,6 +136,7 @@ SCHEMAS: list[dict[str, Any]] = [
                                        "named plan can be quoted against.",
                     },
                 },
+                "required": ["patient_id"],
             },
         },
     },
@@ -174,14 +182,20 @@ SCHEMAS: list[dict[str, Any]] = [
             "name": "book_slot",
             "description": (
                 "Book one of the numbered options from find_appointments. Confirm the day, time "
-                "and doctor with the caller first, then call this."
+                "and doctor with the caller first, then call this. Name the patient it is for: a "
+                "call can involve more than one person, and the appointment goes to whoever's "
+                "chart is open, not to whoever is speaking."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "option": {"type": "integer", "description": "The option number you read out."},
+                    "patient_id": {
+                        "type": "string",
+                        "description": "Who the appointment is for, as returned by open_chart.",
+                    },
                 },
-                "required": ["option"],
+                "required": ["option", "patient_id"],
             },
         },
     },
@@ -290,6 +304,9 @@ class ToolBox:
         self.patient: Optional[dict[str, Any]] = None
         self.patient_context: dict[str, Any] = {}
         self.options: dict[int, Slot] = {}
+        # A call can move to a second patient, and the options on the table were
+        # priced and typed for the first one.
+        self.options_for: Optional[str] = None
         self.named_insurers: list[str] = []
         self.last_reason: Optional[str] = None
 
@@ -349,6 +366,15 @@ class ToolBox:
         if found is None:
             # Recover the demographics from whichever lookup produced this id.
             found = self._remembered(patient_id) or {"patient_id": patient_id}
+
+        if self.patient is not None and self.patient.get("patient_id") != patient_id:
+            # A second patient on the same call inherits nothing from the first:
+            # not their options, not a plan they mentioned, not why they were
+            # refused. All three would otherwise bill or book the wrong person.
+            self.options = {}
+            self.options_for = None
+            self.named_insurers = []
+            self.last_reason = None
 
         self.patient = found
         self.patient_context = context
@@ -434,10 +460,24 @@ class ToolBox:
         if self.patient is None:
             return {"error": "no chart is open",
                     "guidance": "Identify the patient and open their chart first."}
+        # Caught here rather than at booking: by then the slots already carry the
+        # wrong patient's appointment type and plan.
+        wrong = self._wrong_chart(args.get("patient_id"))
+        if wrong is not None:
+            return wrong
 
-        extra = args.get("also_consider_insurer")
-        if extra and extra in self.catalog.plans and extra not in self.named_insurers:
-            self.named_insurers.append(extra)
+        # A plan id is lowercase and underscored ("nueva_mutua") but the caller
+        # says "Nueva Mutua". An unrecognised name used to be dropped in silence,
+        # which the model reads as a second policy that did not help.
+        unrecognised: Optional[str] = None
+        spoken_insurer = str(args.get("also_consider_insurer") or "").strip()
+        if spoken_insurer:
+            extra = normalize_text(spoken_insurer).replace(" ", "_")
+            if extra in self.catalog.plans:
+                if extra not in self.named_insurers:
+                    self.named_insurers.append(extra)
+            else:
+                unrecognised = spoken_insurer
 
         insurers: Optional[list[str]] = None
         if self.named_insurers:
@@ -480,6 +520,7 @@ class ToolBox:
                 "reason": search.reason,
                 "blocked": search.blocked,
                 "trace": search.trace,
+                **self._unknown_plan(unrecognised),
                 "guidance": (
                     "Nothing available. If `reason` names a clinic rule, explain that rule to the "
                     "caller and call end_without_booking with it. If the caller may hold another "
@@ -488,8 +529,15 @@ class ToolBox:
             }
 
         self.options = {index + 1: slot for index, slot in enumerate(search.slots)}
+        self.options_for = self.patient.get("patient_id")
         return {
+            # Echoed so a read-back names the right person out loud.
+            "searched_for": {
+                "patient_id": self.patient.get("patient_id"),
+                "name": self.patient.get("full_name"),
+            },
             "specialty_used": specialty_id,
+            **self._unknown_plan(unrecognised),
             "rerouted_by_age": rerouted,
             "appointment_type_id": search.appointment_type_id,
             "asked_for": search.when.describe() if search.when else None,
@@ -532,6 +580,12 @@ class ToolBox:
                     "guidance": "Call find_appointments again and offer what it returns."}
         if self.patient is None:
             return {"error": "no chart is open"}
+        wrong = self._wrong_chart(args.get("patient_id"))
+        if wrong is not None:
+            return wrong
+        stale = self._stale_options()
+        if stale is not None:
+            return stale
 
         plan, reason = self.engine.plan_booking(self.patient, slot, self.named_insurers)
         if plan is None:
@@ -566,6 +620,9 @@ class ToolBox:
         if not self._known_appointment(appointment_id):
             return {"error": "that appointment is not on the chart",
                     "guidance": "Only an upcoming appointment from open_chart can be moved."}
+        stale = self._stale_options()
+        if stale is not None:
+            return stale
 
         policy = self._policy_for(slot)
         if policy is None:
@@ -646,6 +703,56 @@ class ToolBox:
                 "guidance": "Stay on the line with them for one more sentence, then close."}
 
     # ---- helpers ------------------------------------------------------
+
+    def _wrong_chart(self, wanted: Any) -> Optional[dict[str, Any]]:
+        """Refuse to book for anyone other than the patient whose chart is open.
+
+        On a two-intent call the model tends to move the second person's
+        appointment and then book the caller's own without reopening their
+        chart, which quietly writes the appointment against the wrong patient.
+        Making it name the patient turns that into a correction it can act on.
+        """
+        wanted_id = str(wanted or "").strip()
+        current = (self.patient or {}).get("patient_id")
+        if not wanted_id or wanted_id == current:
+            return None
+        return {
+            "error": f"the open chart is {current}, not {wanted_id}",
+            "guidance": f"Open {wanted_id}'s chart, run find_appointments again for them, and "
+                        "offer what it returns. Slots found under another patient carry that "
+                        "patient's appointment type and plan.",
+        }
+
+    def _stale_options(self) -> Optional[dict[str, Any]]:
+        """Refuse to write when the options belong to a different patient.
+
+        The slots on the table carry the appointment type and the plans that
+        were resolved for whoever the search ran against. Writing them under a
+        second patient produces a booking that looks right and bills wrong,
+        which is worse than asking the model to search again.
+        """
+        current = (self.patient or {}).get("patient_id")
+        if self.options_for is None or self.options_for == current:
+            return None
+        return {
+            "error": "those options were found for a different patient",
+            "found_for": self.options_for,
+            "chart_open": current,
+            "guidance": "Call find_appointments again now this chart is open, then offer what "
+                        "it returns.",
+        }
+
+    def _unknown_plan(self, spoken: Optional[str]) -> dict[str, Any]:
+        """Say so when a plan the caller named is not one the clinic has."""
+        if not spoken:
+            return {}
+        return {
+            "plan_not_recognised": spoken,
+            "known_plans": sorted(self.catalog.plans),
+            "plan_guidance": f"{spoken!r} is not one of the clinic's plans, so nothing was quoted "
+                             "against it. Ask the caller which insurer they hold and try again "
+                             "with the name from `known_plans`.",
+        }
 
     def _known_appointment(self, appointment_id: str) -> bool:
         upcoming = self.patient_context.get("upcoming") or []

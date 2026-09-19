@@ -72,6 +72,10 @@ def agent_text(response: dict[str, Any]) -> str:
     ).lower()
 
 
+def tools_used(response: dict[str, Any]) -> list[str]:
+    return [call.get("name", "") for call in response.get("tool_calls", [])]
+
+
 def full_name(patient: dict[str, Any]) -> str:
     return f"{patient['given_name']} {patient['first_surname']} {patient['second_surname']}"
 
@@ -277,6 +281,9 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
                 "Buenos días, quería cita con la ginecóloga.",
                 f"Soy {full_name(adeslas)}, nací el {spoken_date(adeslas['date_of_birth'])}.",
                 "Con Adeslas, sí.",
+                # The agent should ask about a second plan before refusing, so
+                # this caller has to be the one who genuinely has none.
+                "No, solo tengo Adeslas, ninguna otra.",
                 "Entiendo. Nada más entonces, gracias.",
             ],
             verify=verify_rules,
@@ -474,6 +481,172 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
         verify=verify_language,
     ))
 
+    # 16 — The Questions: the caller acts on whatever they are told, so a wrong
+    # fact shows up as an unbookable slot rather than as a bad sentence.
+    def verify_questions(response: dict[str, Any], result: Result) -> None:
+        result.check("the clinic's own record was consulted",
+                     "clinic_facts" in tools_used(response),
+                     ", ".join(tools_used(response)) or "no tools at all")
+        books = actions_of(response, "book")
+        if not result.check("a BOOK came out", len(books) == 1,
+                            str([s["action"] for s in response["submissions"]])):
+            return
+        payload = books[0]["payload"]
+        slot = parse_slot(payload["slot"])
+        site = payload["location_id"]
+        # The invariant, whatever day they settled on: you cannot be booked into
+        # a site that is shut. This is how a wrong answer about hours shows up.
+        result.check("the site is genuinely open that day", catalog.is_open(slot.date(), site),
+                     f"{site} on {slot.strftime('%A %d %b')}")
+        # Only Centro opens on a Saturday, so a Saturday anywhere else is the
+        # exact failure this problem is built to catch.
+        if slot.weekday() == 5:
+            result.check("a Saturday booking is at Centro", site == "centro",
+                         f"{site} on {slot.strftime('%A %d %b %H:%M')}")
+        result.check("the caller was told which site opens on a Saturday",
+                     "centro" in agent_text(response),
+                     agent_text(response)[:200])
+
+    scenarios.append(Scenario(
+        key="questions",
+        title="16 · The Questions — they book what you tell them, so the fact has to be right",
+        from_number=f"+34{known['phone']}",
+        turns=[
+            "Buenos días. Antes de pedir nada, ¿qué sedes tienen y cuáles abren los sábados?",
+            f"Soy {full_name(known)}, nací el {spoken_date(known['date_of_birth'])}.",
+            "Perfecto. Pues deme cita con el médico de cabecera un sábado, en la sede que abra.",
+            "Sí, esa me vale. Resérvemela.",
+        ],
+        verify=verify_questions,
+    ))
+
+    # 17 — The Second Policy: the plan on file does not cover it, they hold
+    # another, and they will not mention it unless asked.
+    if adeslas:
+        def verify_second_policy(response: dict[str, Any], result: Result) -> None:
+            books = actions_of(response, "book")
+            if not result.check("a BOOK came out once the second plan was known",
+                                len(books) == 1,
+                                str([s["action"] for s in response["submissions"]])):
+                return
+            payload = books[0]["payload"]
+            result.check("billed against the second plan, not the one on file",
+                         payload["policy_id"] == "sanitas",
+                         f"{payload['policy_id']} vs sanitas (record holds "
+                         f"{adeslas.get('insurer')})")
+            provider = catalog.providers.get(payload["provider_id"])
+            result.check("and it is the gynaecologist",
+                         provider is not None and provider.specialty_id == "gynaecology",
+                         f"{provider.name} ({provider.specialty_id})" if provider
+                         else f"unknown provider {payload['provider_id']}")
+
+        scenarios.append(Scenario(
+            key="second_policy",
+            title="17 · The Second Policy — Adeslas cannot, the plan they never mentioned can",
+            from_number=f"+34{adeslas['phone']}",
+            turns=[
+                "Hola, buenos días. Quería pedir cita con la ginecóloga.",
+                f"Soy {full_name(adeslas)}, nací el {spoken_date(adeslas['date_of_birth'])}.",
+                # Volunteered only in answer to the question, the way it happens.
+                "Ah, pues sí, ahora que lo dice también tengo Sanitas por el trabajo.",
+                "Sí, la primera que tenga con esa. Resérvemela.",
+            ],
+            verify=verify_second_policy,
+        ))
+
+    # 17b — the control: their own plan already works, so the one they mention
+    # is a red herring. Catches an agent that has learned to switch plans.
+    own_plan = known.get("insurer")
+    decoy = next((p for p in ("sanitas", "cigna", "axa") if p != own_plan), "cigna")
+
+    def verify_own_policy(response: dict[str, Any], result: Result) -> None:
+        books = actions_of(response, "book")
+        if not result.check("a BOOK came out", len(books) == 1,
+                            str([s["action"] for s in response["submissions"]])):
+            return
+        policy = books[0]["payload"]["policy_id"]
+        result.check("billed against the plan on file, not the one mentioned",
+                     policy == own_plan, f"{policy} vs {own_plan} (decoy was {decoy})")
+
+    if own_plan:
+        scenarios.append(Scenario(
+            key="own_policy",
+            title="17 · The control — the plan on file already works, so leave it alone",
+            from_number=f"+34{known['phone']}",
+            turns=[
+                "Buenas, quería cita con el médico de cabecera, lo antes posible.",
+                f"{full_name(known)}, nacida el {spoken_date(known['date_of_birth'])}.",
+                f"Por cierto, además del seguro que tienen ustedes también tengo {decoy.title()}, "
+                "por si sirve de algo.",
+                "La primera que haya me vale. Confírmemela.",
+            ],
+            verify=verify_own_policy,
+        ))
+
+    # 18 — The Real Call: two patients and two intents in one call, which is
+    # where per-call state that is not re-scoped starts booking the wrong person.
+    if with_appointment and people.get("second"):
+        holder = with_appointment
+        holder_appointment = with_appointment["_appointment"]
+        other = people["second"]
+
+        def verify_real_call(response: dict[str, Any], result: Result) -> None:
+            reschedules = actions_of(response, "reschedule")
+            books = actions_of(response, "book")
+            result.check("exactly one RESCHEDULE", len(reschedules) == 1,
+                         str([s["action"] for s in response["submissions"]]))
+            result.check("exactly one BOOK alongside it", len(books) == 1,
+                         str([s["action"] for s in response["submissions"]]))
+            if reschedules:
+                moved = reschedules[0]["payload"]
+                result.check("the moved appointment is the one from the diary",
+                             moved["appointment_id"] == holder_appointment["appointment_id"],
+                             f"{moved['appointment_id']} vs "
+                             f"{holder_appointment['appointment_id']}")
+                result.check("moved to a real provider",
+                             moved["provider_id"] in catalog.providers, moved["provider_id"])
+            if books:
+                booked = books[0]["payload"]
+                result.check("the new appointment is for the other patient",
+                             booked["patient_id"] == other["patient_id"],
+                             f"{booked['patient_id']} vs {other['patient_id']}")
+                provider = catalog.providers.get(booked["provider_id"])
+                if not result.check("booked with a real provider", provider is not None,
+                                    booked["provider_id"]):
+                    return
+                # The type and the plan are the two fields that come out wrong
+                # when the options belong to the patient from the first intent.
+                expected = catalog.expected_appointment_type(
+                    provider.specialty_id, bool(other.get("has_visited_before"))
+                )
+                result.check("with the type that patient's own history calls for",
+                             expected is not None
+                             and booked["appointment_type_id"] == expected.id,
+                             f"{booked['appointment_type_id']} vs "
+                             f"{expected.id if expected else '?'}")
+                result.check("and billed against a plan that patient holds",
+                             booked["policy_id"] == other.get("insurer"),
+                             f"{booked['policy_id']} vs {other.get('insurer')}")
+
+        scenarios.append(Scenario(
+            key="real_call",
+            title="18 · The Real Call — move one patient's appointment, book another's",
+            from_number=f"+34{other['phone']}",
+            turns=[
+                f"Hola, buenos días. Llamo por dos cosas. Soy {full_name(other)}, "
+                f"nací el {spoken_date(other['date_of_birth'])}.",
+                f"La primera es de parte de un familiar mío, {full_name(holder)}, "
+                f"nacida el {spoken_date(holder['date_of_birth'])}. Me ha pedido que le "
+                "cambie la cita que tiene, que no le viene bien.",
+                "Cualquier otro día que tengan le vale, el primero que haya.",
+                "Sí, ese. Cámbiela a ese.",
+                "Y la segunda cosa es que quería una para mí, con el médico de cabecera.",
+                "Perdone, con el de cabecera no, mejor con el traumatólogo, que es lo de la rodilla.",
+                "La primera que tenga. Confírmemela y ya está, gracias.",
+            ],
+            verify=verify_real_call,
+        ))
+
     return scenarios
 
 
@@ -505,6 +678,17 @@ async def gather_people(client: PlatformClient) -> dict[str, dict[str, Any]]:
             upcoming = await client.appointments(candidate["patient_id"], when="upcoming")
             if upcoming:
                 people["with_appointment"] = {**candidate, "_appointment": upcoming[0]}
+                break
+
+    # A second, distinct patient, so a two-intent call has someone to book for
+    # who is not the person whose appointment is being moved.
+    holder = people.get("with_appointment")
+    if holder:
+        for candidate in pool:
+            if candidate["patient_id"] == holder["patient_id"]:
+                continue
+            if candidate.get("has_visited_before") and candidate.get("insurer"):
+                people["second"] = candidate
                 break
     return people
 

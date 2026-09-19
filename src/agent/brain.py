@@ -176,10 +176,17 @@ class Agent:
 
     def note_interruption(self, spoken_so_far: str) -> None:
         """Record only what the caller actually heard before cutting in."""
-        for message in reversed(self.messages):
-            if message.get("role") == "assistant" and message.get("content"):
-                message["content"] = spoken_so_far or message["content"]
-                break
+        for index in range(len(self.messages) - 1, -1, -1):
+            message = self.messages[index]
+            if message.get("role") != "assistant" or not message.get("content"):
+                continue
+            if spoken_so_far:
+                message["content"] = spoken_so_far
+            elif not message.get("tool_calls"):
+                # Cut off before a single frame went out, so the caller heard
+                # none of it and it is not part of the conversation at all.
+                self.messages.pop(index)
+            break
 
     def _sound_history(self) -> list[dict[str, Any]]:
         """Guarantee every tool_calls message is followed by exactly its results.
