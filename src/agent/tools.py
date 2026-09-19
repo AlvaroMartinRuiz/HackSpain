@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Optional
 
 from src.domain.engine import Slot
-from src.domain.identity import normalize_text
+from src.domain.identity import normalize_text, parse_national_id
 from src.domain.outcomes import ALL_REASONS, is_valid_reason
 from src.domain.timeref import format_slot, now_madrid
 from src.domain.triage import triage
@@ -18,6 +18,13 @@ if TYPE_CHECKING:  # pragma: no cover
     from src.telephony.session import CallSession
 
 REASON_LIST = ", ".join(ALL_REASONS)
+
+# Refusals a second plan can undo. Nobody volunteers one, so the refusal waits
+# until the caller has been asked.
+INSURANCE_REASONS = frozenset({
+    "specialty_not_covered", "location_not_covered", "provider_not_in_network",
+    "insurer_referral_required", "allowance_exhausted",
+})
 
 SCHEMAS: list[dict[str, Any]] = [
     {
@@ -234,13 +241,19 @@ SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "register_new_patient",
             "description": (
-                "Put a caller the directory does not know on file. Every field is checked: the "
-                "national id's own letter is re-derived from its digits, so read it back before "
-                "calling this. Nothing is booked."
+                "Put a caller the directory does not know on file, in two steps. First call it "
+                "without `confirmed`: nothing is sent, and it hands back the details spelled out "
+                "for you to read back. Once the caller says they are right, call it again with "
+                "the same details and confirmed=true. One wrong character fails the record. "
+                "Nothing is booked."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "confirmed": {
+                        "type": "boolean",
+                        "description": "True only after the caller confirmed the read-back.",
+                    },
                     "given_name": {"type": "string"},
                     "first_surname": {"type": "string"},
                     "second_surname": {"type": "string"},
@@ -268,6 +281,11 @@ SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "reason": {"type": "string", "enum": list(ALL_REASONS)},
                     "explanation": {"type": "string", "description": "One line for the record."},
+                    "caller_has_no_other_plan": {
+                        "type": "boolean",
+                        "description": "True only once you asked whether they hold another "
+                                       "insurance plan and they said they do not.",
+                    },
                 },
                 "required": ["reason"],
             },
@@ -309,6 +327,8 @@ class ToolBox:
         self.options_for: Optional[str] = None
         self.named_insurers: list[str] = []
         self.last_reason: Optional[str] = None
+        # What was last read back to a new patient; only that is ever registered.
+        self.pending_registration: Optional[dict[str, Any]] = None
         # Provider ids a tool has actually handed over on this call. The briefing
         # lists every doctor by name, which is enough for the model to resolve a
         # spoken surname itself and skip the ambiguity find_doctor exists to
@@ -691,6 +711,30 @@ class ToolBox:
                     "guidance": "Ask the caller to confirm exactly these details, then call again. "
                                 "For the id, read the digits back and confirm the final letter."}
 
+        if not args.get("confirmed") or fields != self.pending_registration:
+            # A corrected detail changes the fields, which lands back here: what
+            # is registered is always exactly what the caller last heard.
+            self.pending_registration = fields
+            letter_inferred = bool(parse_national_id(str(args.get("national_id", "")))["letter_missing"])
+            await self.session.record("decision", {
+                "stage": "register_read_back", "fields": fields,
+                "letter_inferred": letter_inferred,
+            })
+            return {
+                "registered": False,
+                "needs_confirmation": True,
+                "read_back": _read_back(fields),
+                "letter_inferred": letter_inferred,
+                "guidance": "Nothing is on file yet. Read these back in one turn: spell the given "
+                            "name and both surnames, give the id digit by digit with its letter"
+                            + (" (the caller did not say the letter; it was worked out from the "
+                               "digits, so ask them to confirm it)" if letter_inferred else "")
+                            + ", and spell the email. Ask whether it is all correct. If yes, call "
+                              "register_new_patient again with the same details and confirmed=true; "
+                              "if they correct anything, call it again with the corrected details "
+                              "and no confirmed.",
+            }
+
         payload = {"call_id": self.session.call_id, **fields}
         result = await self.session.submit("register", payload)
         await self.session.record("decision", {"stage": "registered", "payload": payload})
@@ -704,6 +748,20 @@ class ToolBox:
 
     async def _tool_end_without_booking(self, args: dict[str, Any]) -> dict[str, Any]:
         reason = self._clean_reason(args.get("reason"))
+        if (reason in INSURANCE_REASONS and not self.named_insurers
+                and not args.get("caller_has_no_other_plan")):
+            await self.session.record("decision", {
+                "stage": "refusal_held", "reason": reason,
+                "why": "an insurance refusal waits until the caller is asked about a second plan",
+            })
+            return {
+                "recorded": False,
+                "error": "ask_second_plan",
+                "guidance": "Before refusing, ask whether they hold another insurance plan. If "
+                            "they name one, call find_appointments again with "
+                            "also_consider_insurer. Only if they say they have no other plan, "
+                            "call end_without_booking again with caller_has_no_other_plan=true.",
+            }
         result = await self.session.submit(
             "no_action", {"call_id": self.session.call_id, "reason": reason}
         )
@@ -806,3 +864,28 @@ class ToolBox:
         if self.patient is None:
             return "patient_not_found"
         return "no_availability"
+
+
+def _spell(text: str) -> str:
+    """"Nuria" -> "N-U-R-I-A": a misheard letter is heard when read one at a time."""
+    return "-".join(ch.upper() for ch in text if not ch.isspace())
+
+
+def _spell_email(email: str) -> str:
+    local, _, domain = email.partition("@")
+    marks = {".": "dot", "_": "underscore", "-": "dash"}
+    spelled = " ".join(marks.get(ch, ch.upper()) for ch in local)
+    return f"{spelled} at {domain.replace('.', ' dot ')}"
+
+
+def _read_back(fields: dict[str, Any]) -> dict[str, str]:
+    return {
+        "given_name": _spell(fields["given_name"]),
+        "first_surname": _spell(fields["first_surname"]),
+        "second_surname": _spell(fields["second_surname"]),
+        "national_id": " ".join(fields["national_id"]),
+        "date_of_birth": fields["date_of_birth"],
+        "phone": " ".join(fields["phone"]),
+        "email": _spell_email(fields["email"]),
+        "insurer": fields["insurer"],
+    }
