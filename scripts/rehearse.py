@@ -540,7 +540,8 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
             "qué horario exactamente?",
             f"Soy {full_name(known)}, nací el {spoken_date(known['date_of_birth'])}.",
             "Perfecto. Pues deme cita con el médico de cabecera un sábado, en la sede que abra.",
-            "Sí, esa me vale. Resérvemela.",
+            # Two times are usually offered; a bare "yes" is not consent to either.
+            "La primera que me ha dicho, la más temprana. Resérvemela.",
         ],
         verify=verify_questions,
     ))

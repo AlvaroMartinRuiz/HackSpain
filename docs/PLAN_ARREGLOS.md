@@ -283,6 +283,14 @@ Después de cada punto: `check_domain.py`, `check_engine.py` y `rehearse.py` en 
 
 ## Plan: detectar el catalán (p11, peso 3)
 
+> **Actualización (merge de `d69cfed`, Emma):** ya hay detección. `src/voice/language.py`
+> reconoce el catalán por palabras y expresiones en la transcripción de `multi`
+> (*voldria, metge, si us plau…*; con la frase de prueba, *"voldria"* + *"hora"*
+> bastan). Al detectarlo, reabre Deepgram con `language=ca`, que transcribe
+> perfecto (medido). Con eso **B3 ya se activa**: médicos que hablan catalán y
+> voz catalana. Lo de abajo queda como **mejora**, solo si en las prácticas del p11
+> la detección por palabras falla, o si da falsos positivos en llamadas en español.
+
 **Hoy B3 no se activa nunca.** Deepgram en `multi` no reconoce el catalán: lo transcribe deformado (*"buen día… balmecha de capsulera"*) y nunca devuelve `ca`. Así que ni el filtro de médicos que hablan catalán ni la voz catalana llegan a usarse, y los casos privados del p11 son sobre todo en catalán.
 
 ### Qué se ha medido (con una frase catalana y otra española sintetizadas)
