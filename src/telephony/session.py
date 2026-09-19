@@ -89,7 +89,7 @@ class CallSession:
         self.synthesizer: Optional[Synthesizer] = None if text_mode else build_synthesizer()
         self.transcriber = None if text_mode else build_transcriber(
             on_partial=self._on_partial,
-            on_final=self._on_final,
+            on_final=self._queue_final,
             on_speech_started=self._on_speech_started,
             on_notice=self._on_stt_notice,
             keyterms=keyterms_for(catalog),
@@ -109,8 +109,14 @@ class CallSession:
         self._current_sent = 0
         self._current_total = 0
         self._synthesizing = 0
+        self._synthesis_task: Optional[asyncio.Task] = None
         self._turn_lock = asyncio.Lock()
         self._pending_turn: Optional[str] = None
+        self._final_turns: asyncio.Queue = asyncio.Queue()
+        self._turn_worker_task: Optional[asyncio.Task] = None
+        self._completion_requested = False
+        self._completion_played = False
+        self._completion_audio_baseline = 0
         # Two flags, not one: the door shuts to new turns only after the last
         # one has been recovered, but finalize still must not run twice.
         self._closing = False
@@ -134,6 +140,9 @@ class CallSession:
         self._last_repair_prompt_at = 0.0
         self._media_frames = 0
         self._media_bytes = 0
+        self._outbound_frames = 0
+        self._outbound_bytes = 0
+        self._outbound_signal_frames = 0
         self._media_by_track: dict[str, int] = {}
         self._tape: dict[str, bytearray] = {"inbound": bytearray(), "outbound": bytearray()}
         self._tape_saved = False
@@ -141,8 +150,11 @@ class CallSession:
     # ---- lifecycle ----------------------------------------------------
 
     async def start(self) -> None:
+        await self._record_audio_output()
         if not self.text_mode:
+            self._turn_worker_task = asyncio.create_task(self._turn_worker(), name=f"turns:{self.call_id}")
             self._tasks = [
+                self._turn_worker_task,
                 asyncio.create_task(self._speaker_loop(), name=f"speaker:{self.call_id}"),
                 asyncio.create_task(self._player_loop(), name=f"player:{self.call_id}"),
                 asyncio.create_task(self._deadline_loop(), name=f"deadline:{self.call_id}"),
@@ -289,6 +301,7 @@ class CallSession:
             except (asyncio.CancelledError, Exception):
                 pass
 
+        await self._record_audio_output(complete=True)
         await self._guarantee_submission()
         self._frozen = True
         self._save_tape()
@@ -328,6 +341,8 @@ class CallSession:
 
     async def _settled(self) -> None:
         """Return once no turn is being worked on."""
+        if self._turn_worker_task is not None:
+            await self._final_turns.join()
         async with self._turn_lock:
             pass
 
@@ -405,9 +420,14 @@ class CallSession:
             # first frame reaching the wire neither queue holds anything and the
             # agent would otherwise look idle for the length of a synthesis.
             self._synthesizing += 1
+            self._synthesis_task = asyncio.create_task(self._synthesize(generation, text, language))
             try:
-                await self._synthesize(generation, text, language)
+                await self._synthesis_task
+            except asyncio.CancelledError:
+                if generation == self._generation or self._closing or asyncio.current_task().cancelling():
+                    raise
             finally:
+                self._synthesis_task = None
                 self._synthesizing -= 1
                 await self._audio_queue.put((generation, text, None))
             # A synthesis that failed outright never reaches _finish_speaking.
@@ -450,17 +470,24 @@ class CallSession:
     async def _player_loop(self) -> None:
         """Send 20 ms frames at the pace a phone line plays them."""
         playhead = time.monotonic()
+        playing_generation = self._generation
         while True:
             generation, text, chunk = await self._audio_queue.get()
             if generation != self._generation:
                 continue
+            if generation != playing_generation:
+                playhead = time.monotonic()
+                playing_generation = generation
             if chunk is None:
                 if (
                     self._audio_queue.empty()
                     and self._say_queue.empty()
                     and self._synthesizing == 0
                 ):
-                    await self._finish_speaking(text)
+                    await asyncio.sleep(max(0, playhead - time.monotonic()))
+                    if (generation == self._generation and self._audio_queue.empty()
+                            and self._say_queue.empty() and self._synthesizing == 0):
+                        await self._finish_speaking(text)
                     playhead = max(playhead, time.monotonic())
                 continue
 
@@ -486,6 +513,8 @@ class CallSession:
                 now = time.monotonic()
                 if playhead > now + PLAYBACK_LEAD_S:
                     await asyncio.sleep(playhead - now - PLAYBACK_LEAD_S)
+                if generation != self._generation:
+                    break
                 await self._send_media(frame)
                 self._current_sent += len(frame)
                 playhead += audio.FRAME_MS / 1000
@@ -500,6 +529,8 @@ class CallSession:
         self._current_sent = 0
         self._current_total = 0
         self._waiting_since = time.monotonic()
+        if self._completion_requested and self._outbound_signal_frames > self._completion_audio_baseline:
+            self._completion_played = True
         await self.record("agent_turn_end", {"text": text})
         self._arm_silence()
 
@@ -508,8 +539,7 @@ class CallSession:
     def _arm_silence(self) -> None:
         """Start listening for silence, if the agent has nothing more to say."""
         if (self.text_mode or self._closing or self._sealing or self.is_speaking
-                or self._turn_lock.locked()
-                or self._silence_prompts >= settings.silence_prompt_max):
+                or self._turn_lock.locked() or not self._final_turns.empty()):
             return
         self._disarm_silence()
         self._silence_task = asyncio.create_task(
@@ -523,22 +553,38 @@ class CallSession:
             task.cancel()
 
     async def _silence_watch(self) -> None:
-        wait_s = (
-            SILENCE_OPENING_RETRY_S
-            if not self._heard_caller and self._silence_prompts == 0
-            else settings.silence_prompt_s
-        )
+        ready_to_close = self._completion_requested and self._completion_played
+        if ready_to_close:
+            wait_s = COMPLETED_CLOSE_S
+        elif self._silence_prompts >= settings.silence_prompt_max:
+            wait_s = SILENCE_CLOSE_S
+        else:
+            wait_s = (SILENCE_OPENING_RETRY_S if not self._heard_caller and self._silence_prompts == 0
+                      else settings.silence_prompt_s)
         try:
             await asyncio.sleep(wait_s)
+            while self._caller_speaking:
+                hold = SPEECH_HOLD_S - (time.monotonic() - self._last_speech_started_at)
+                if hold <= 0:
+                    self._caller_speaking = False
+                    break
+                await asyncio.sleep(hold)
         except asyncio.CancelledError:
             return
         if (
             self.is_speaking
-            or self._caller_speaking
             or self._turn_lock.locked()
+            or not self._final_turns.empty()
             or self._closing
             or self._sealing
         ):
+            return
+        ready_to_close = ready_to_close and self._completion_requested and self._completion_played
+        if ready_to_close or self._silence_prompts >= settings.silence_prompt_max:
+            status = "completed" if ready_to_close else "idle_timeout"
+            await self.record("decision", {"stage": status, "silent_s": wait_s})
+            await self.finalize(status)
+            await self._close_connection()
             return
         if not self._heard_caller:
             text, language = _opening_retry(self._silence_prompts == 0)
@@ -565,19 +611,42 @@ class CallSession:
             "streamSid": self.stream_sid,
             "media": {"payload": base64.b64encode(frame).decode("ascii")},
         })
+        self._outbound_frames += 1
+        self._outbound_bytes += len(frame)
+        has_signal = bool(frame.translate(None, b"\xff\x7f"))
+        self._outbound_signal_frames += int(has_signal)
+        if self._outbound_frames == 1 or (has_signal and self._outbound_signal_frames == 1):
+            await self._record_audio_output()
+
+    async def _record_audio_output(self, complete: bool = False) -> None:
+        await self.record("audio_output", {
+            "text_mode": self.text_mode,
+            "frames": self._outbound_frames,
+            "bytes": self._outbound_bytes,
+            "non_silent_frames": self._outbound_signal_frames,
+            "complete": complete,
+        })
 
     async def _interrupt(self, heard: str) -> None:
         """The caller cut in: stop talking now and keep only what they heard."""
+        was_speaking = self.is_speaking
         self._generation += 1
+        self._completion_requested = False
         _drain(self._say_queue)
         _drain(self._audio_queue)
+        if self._synthesis_task is not None:
+            self._synthesis_task.cancel()
 
         spoken = self._spoken_so_far()
         self._speaking_since = None
-        self.agent.note_interruption(spoken)
+        if was_speaking or self.agent.is_responding:
+            self.agent.note_interruption(spoken)
 
-        await self._send({"event": "clear", "streamSid": self.stream_sid})
-        await self.record("interruption", {"heard": heard, "agent_had_said": spoken})
+        if was_speaking:
+            await self._send({"event": "clear", "streamSid": self.stream_sid})
+            await self.record("interruption", {"heard": heard, "agent_had_said": spoken})
+        else:
+            await self.record("decision", {"stage": "response_superseded", "why": "new caller input"})
 
     def _spoken_so_far(self) -> str:
         """Cut the current sentence where the audio actually stopped."""
@@ -642,6 +711,7 @@ class CallSession:
 
     def _caller_is_talking(self) -> None:
         self._disarm_silence()
+        self._completion_requested = False
         self._silence_prompts = 0
 
     async def _on_speech_started(self) -> None:
@@ -652,18 +722,19 @@ class CallSession:
         await self.record("caller_speaking", {})
 
     async def _on_partial(self, text: str) -> None:
-        if not self._looks_like_echo(text):
-            self._caller_is_talking()
+        if not text.strip() or self._sealing or self._looks_like_echo(text):
+            return
+        self._caller_is_talking()
         now = time.monotonic()
         self._caller_speaking = True
+        self._last_speech_started_at = now
         self._waiting_since = None
         if now - self._last_partial_at > 0.4:
             self._last_partial_at = now
             await self.record("stt_partial", {"text": text})
 
-        if not settings.barge_in or not self.is_speaking:
-            return
-        if self._looks_like_echo(text):
+        self._arm_silence()
+        if not settings.barge_in or not (self.is_speaking or self.agent.is_responding):
             return
         # The grace period guards against our own first frames; before any
         # audio is on the line there is nothing to guard.
@@ -674,6 +745,36 @@ class CallSession:
         if not self._worthy_barge_in(text, final=False):
             return
         await self._interrupt(text.strip())
+
+    async def _queue_final(self, text: str, language: Optional[str]) -> None:
+        text = text.strip()
+        if not text or self._closed:
+            return
+        if self._looks_like_echo(text):
+            await self.record("stt_echo", {"text": text})
+            return
+        self._caller_is_talking()
+        if settings.barge_in and (self.is_speaking or self._turn_lock.locked()):
+            await self._interrupt(text)
+        await self._final_turns.put((text, language))
+
+    async def _turn_worker(self) -> None:
+        while True:
+            batch = [await self._final_turns.get()]
+            while not self._final_turns.empty():
+                batch.append(self._final_turns.get_nowait())
+            try:
+                text = "\n".join(item[0] for item in batch)
+                language = next((item[1] for item in reversed(batch) if item[1]), None)
+                await self._on_final(text, language)
+            except Exception as exc:
+                self._completion_requested = False
+                await self.record("error", {"where": "turn", "error_type": type(exc).__name__,
+                                            "detail": f"{type(exc).__name__} during caller turn"})
+            finally:
+                for _ in batch:
+                    self._final_turns.task_done()
+                self._arm_silence()
 
     async def _on_final(self, text: str, language: Optional[str]) -> None:
         text = (text or "").strip()
@@ -741,7 +842,7 @@ class CallSession:
         if self._turn_lock.locked():
             # The caller added something while we were still working: keep the
             # newest, because the last thing they asked for is the request.
-            self._pending_turn = text
+            self._pending_turn = "\n".join(part for part in (self._pending_turn, text) if part)
             return
 
         self._caller_is_talking()

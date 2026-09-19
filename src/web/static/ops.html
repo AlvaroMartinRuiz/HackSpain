@@ -85,7 +85,9 @@
       <div class="seg" id="call-filter">
         <button type="button" class="on" data-scope="all">All</button>
         <button type="button" data-scope="submitted">With record</button>
-        <button type="button" data-scope="silent">No record</button>
+        <button type="button" data-scope="missing">No record</button>
+        <button type="button" data-scope="silent">Silent audio</button>
+        <button type="button" data-scope="audio_unknown">Audio unknown</button>
         <button type="button" data-scope="errors">With errors</button>
       </div>
     </div>
@@ -106,6 +108,7 @@
               <th style="text-align:right">Turns</th>
               <th style="text-align:right">Cuts</th>
               <th style="text-align:right">p50</th>
+              <th>Audio output</th>
               <th>Record</th>
             </tr>
           </thead>

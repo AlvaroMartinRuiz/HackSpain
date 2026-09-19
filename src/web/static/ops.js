@@ -218,10 +218,18 @@ const KPIS = [
   { key: "peak_concurrency", label: "Peak concurrent", icon: "metric-peak" },
   { key: "median_response_ms", label: "Response p50", icon: "metric-latency", format: msOrDash },
   { key: "p90_response_ms", label: "Response p90", icon: "metric-latency", format: msOrDash },
-  { key: "with_accepted_submission", label: "Accepted records", icon: "outcome-book",
+  { key: "with_accepted_submission", label: "HTTP accepted", icon: "outcome-book",
+    description: "Recent completed calls with an HTTP-accepted submission; not a scored pass.",
     tone: (v) => (v > 0 ? "good" : "") },
-  { key: "silent_calls", label: "No record", icon: "metric-silent",
+  { key: "missing_submission_calls", label: "Missing submissions", icon: "outcome-no_action",
+    description: "Recent completed calls with no submission attempt recorded, regardless of audio.",
     tone: (v) => (v > 0 ? "bad" : "") },
+  { key: "silent_calls", label: "Silent audio", icon: "metric-silent",
+    description: "Measured completed voice calls with no non-silent audio sent. Excludes text rehearsals and unknown audio.",
+    tone: (v) => (v > 0 ? "bad" : "") },
+  { key: "audio_unknown_calls", label: "Audio unknown", icon: "metric-silent",
+    description: "Recent completed calls without enough outbound telemetry to classify audio.",
+    tone: (v) => (v > 0 ? "warn" : "") },
   { key: "interruptions", label: "Interruptions", icon: "metric-interruption" },
   { key: "calls_with_errors", label: "With errors", icon: "outcome-no_action",
     tone: (v) => (v > 0 ? "warn" : "") },
@@ -231,10 +239,11 @@ function renderStats(stats) {
   if (!stats) return;
   state.stats = stats;
   el("kpis").innerHTML = KPIS.map((kpi) => {
-    const raw = stats[kpi.key] ?? 0;
+    const raw = kpi.key === "silent_calls" && stats.missing_submission_calls == null
+      ? null : stats[kpi.key];
     const tone = kpi.tone ? kpi.tone(raw) : "";
-    const shown = kpi.format ? kpi.format(stats[kpi.key]) : raw;
-    return `<div class="kpi ${tone}">
+    const shown = kpi.format ? kpi.format(raw) : (raw ?? "–");
+    return `<div class="kpi ${tone}" title="${escapeHtml(kpi.description || kpi.label)}">
       <span class="k-icon">${icon(kpi.icon)}</span>
       <span class="k-text"><b>${escapeHtml(shown)}</b><span>${escapeHtml(kpi.label)}</span></span>
     </div>`;
@@ -349,10 +358,17 @@ function agentCard(call) {
 
 // ---- the calls table -------------------------------------------------
 
+const AUDIO_LABELS = {
+  signal: "Signal sent", silent: "Silent", unknown: "Unknown",
+  pending: "Pending", not_applicable: "Text only",
+};
+
 const SCOPES = {
   all: () => true,
   submitted: (call) => (call.actions || []).length > 0,
-  silent: (call) => !call.live && !(call.actions || []).length,
+  missing: (call) => !call.live && !(call.actions || []).length,
+  silent: (call) => !call.live && call.audio_status === "silent",
+  audio_unknown: (call) => !call.live && (!call.audio_status || call.audio_status === "unknown"),
   errors: (call) => Boolean(call.errors),
 };
 
@@ -361,7 +377,7 @@ function renderCalls() {
   el("call-count").textContent = rows.length;
   el("calls-body").innerHTML = rows.length
     ? rows.map(callRow).join("")
-    : `<tr class="empty-row"><td colspan="8">Nothing matches this filter</td></tr>`;
+    : `<tr class="empty-row"><td colspan="9">Nothing matches this filter</td></tr>`;
 
   el("calls-body").querySelectorAll("tr[data-id]").forEach((node) => {
     const open = () => {
@@ -404,6 +420,7 @@ function callRow(call) {
     <td class="num">${call.turns ?? 0}</td>
     <td class="num">${call.interruptions || ""}</td>
     <td class="num">${call.median_response_ms || ""}</td>
+    <td title="Non-silent signal sent to the socket, not proof of intelligible speech or caller playback.">${escapeHtml(AUDIO_LABELS[call.audio_status] || "Unknown")}</td>
     <td class="acts">${record}${call.errors ? `<span class="badge err">${call.errors}</span>` : ""}</td>
   </tr>`;
 }
@@ -607,6 +624,9 @@ function renderTabs() {
   el("tab-decisions").innerHTML = (detail.decisions || []).length
     ? detail.decisions.map(decisionRow).join("")
     : '<div class="entry"><div class="trace">No decisions yet.</div></div>';
+  const errors = Array.isArray(detail.errors) ? detail.errors : [];
+  if (errors.length) el("tab-decisions").innerHTML +=
+    `<div class="group-label">Failures</div>${errors.map(diagnosticRow).join("")}`;
 
   el("tab-tools").innerHTML = (detail.tool_calls || []).length
     ? detail.tool_calls.map(toolRow).join("")
@@ -615,12 +635,24 @@ function renderTabs() {
   const submissions = detail.submissions || [];
   const clinic = (detail.clinic_calls || []).slice(-12);
   el("tab-record").innerHTML =
+    '<div class="entry"><div class="trace">Submission receipts only. Official scored outcome: not loaded. Dry runs are local, not platform receipts.</div></div>' +
     (submissions.length
       ? submissions.map(submissionRow).join("")
       : '<div class="entry"><div class="trace">Nothing submitted yet.</div></div>')
     + (clinic.length
       ? `<div class="group-label">Clinic lookups</div>${clinic.map(clinicRow).join("")}`
       : "");
+}
+
+function diagnosticRow(error) {
+  const metadata = {};
+  for (const key of ["error_type", "phase", "http_status", "elapsed_ms", "first_token_ms", "output_started", "round", "model"]) {
+    if (error[key] !== undefined) metadata[key] = error[key];
+  }
+  return `<div class="entry"><div class="head"><b class="reason">${escapeHtml(error.where || "error")}</b>
+    <span class="ms">${escapeHtml(clock(error.ts))}</span></div>
+    <div class="trace">${escapeHtml(error.detail || error.error_type || "No diagnostic detail recorded")}</div>
+    <pre>${escapeHtml(pretty(metadata))}</pre></div>`;
 }
 
 function decisionRow(decision) {
@@ -655,7 +687,7 @@ function submissionRow(submission) {
       <b class="${ok ? "stage" : "reason"}">
         <span class="b-icon">${icon(`outcome-${submission.action}`)}</span>${escapeHtml(submission.action)}
       </b>
-      <span class="ms">HTTP ${submission.status} · ${submission.elapsed_ms ?? "?"} ms${retries}</span>
+      <span class="ms">${submission.dry_run ? "Local dry run" : `HTTP ${submission.status}`} · ${submission.elapsed_ms ?? "?"} ms${retries}</span>
     </div>
     <pre>${escapeHtml(pretty(submission.payload))}</pre>
   </div>`;
@@ -772,6 +804,10 @@ function applyEvent(message) {
       break;
     case "submit":
       (detail.submissions = detail.submissions || []).push(payload);
+      break;
+    case "error":
+      if (!Array.isArray(detail.errors)) detail.errors = [];
+      detail.errors.push({ ...payload, ts: event.ts });
       break;
     case "patient_identified":
       detail.patient_full = payload.patient;

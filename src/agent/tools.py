@@ -343,6 +343,23 @@ SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "finish_call",
+            "description": (
+                "Request a graceful close only after ALL caller requests and follow-up questions "
+                "are resolved and the required submissions succeeded. A first booking on a "
+                "multi-intent call is not completion. Then give the final confirmation/goodbye. "
+                "The caller can still interrupt or ask for something else during the quiet grace period."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"all_requests_resolved": {"type": "boolean"}},
+                "required": ["all_requests_resolved"],
+            },
+        },
+    },
 ]
 
 
@@ -371,15 +388,26 @@ class ToolBox:
         self.resolved_providers: set[str] = set()
         self.registration_attempted = False
         self.last_register_fields: Optional[dict[str, Any]] = None
+        self.completion_blocked = False
 
     def schemas(self) -> list[dict[str, Any]]:
         return SCHEMAS
 
     async def dispatch(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name != "finish_call":
+            self.session._completion_requested = False
         handler = getattr(self, f"_tool_{name}", None)
         if handler is None:
+            self.completion_blocked = True
             return {"error": f"no such tool: {name}"}
-        return await handler(arguments)
+        result = await handler(arguments)
+        if name != "finish_call":
+            outcomes = [result.get(key) for key in ("booked", "moved", "cancelled", "registered", "recorded")]
+            if result.get("error") or result.get("needs_confirmation") or any(v is False for v in outcomes):
+                self.completion_blocked = True
+            elif any(v is True for v in outcomes):
+                self.completion_blocked = False
+        return result
 
     # ---- lookups ------------------------------------------------------
 
@@ -710,6 +738,24 @@ class ToolBox:
         }
 
     # ---- writes -------------------------------------------------------
+
+    async def _tool_finish_call(self, args: dict[str, Any]) -> dict[str, Any]:
+        session = self.session
+        session._completion_requested = False
+        latest = session.submissions[-1] if session.submissions else None
+        if (args.get("all_requests_resolved") is not True or latest is None
+                or not (latest.accepted or latest.duplicate)
+                or session._pending_turn or not session._final_turns.empty()
+                or self.completion_blocked or session._closing):
+            return {"closing_when_quiet": False,
+                    "guidance": "Resolve every outstanding request and confirm successful submissions first."}
+        session._completion_requested = True
+        session._completion_played = False
+        session._completion_audio_baseline = session._outbound_signal_frames
+        await session.record("decision", {"stage": "completion_requested",
+                                          "why": "agent reports all requests resolved; waiting for quiet after playback"})
+        return {"closing_when_quiet": True,
+                "guidance": "Give the final confirmation and goodbye briefly. New caller speech keeps the call open."}
 
     async def _tool_book_slot(self, args: dict[str, Any]) -> dict[str, Any]:
         if args.get("caller_confirmed") is not True:

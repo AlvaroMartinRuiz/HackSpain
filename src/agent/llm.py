@@ -46,7 +46,21 @@ class Completion:
 
 
 class LLMError(RuntimeError):
-    pass
+    def __init__(self, error_type: str, *, phase: str = "request", http_status: Optional[int] = None,
+                 elapsed_ms: int = 0, first_token_ms: Optional[int] = None) -> None:
+        detail = f"{error_type} during {phase}"
+        if http_status is not None:
+            detail += f" (HTTP {http_status})"
+        super().__init__(detail)
+        self.diagnostic = {
+            "where": "llm", "detail": detail, "error_type": error_type,
+            "phase": phase, "http_status": http_status, "elapsed_ms": elapsed_ms,
+            "first_token_ms": first_token_ms, "output_started": first_token_ms is not None,
+            "model": settings.llm_model,
+        }
+
+    def as_dict(self) -> dict[str, Any]:
+        return dict(self.diagnostic)
 
 
 class LLMClient:
@@ -85,23 +99,37 @@ class LLMClient:
         completion = Completion()
         started = time.perf_counter()
         partial: dict[int, ToolCall] = {}
+        phase = "request"
+        status: Optional[int] = None
+        finished = False
+
+        def failure(error_type: str) -> LLMError:
+            return LLMError(error_type, phase=phase, http_status=status,
+                            elapsed_ms=int((time.perf_counter() - started) * 1000),
+                            first_token_ms=completion.first_token_ms)
 
         try:
             async with self._client.stream("POST", "/chat/completions", json=body) as response:
-                if response.status_code != 200:
-                    detail = (await response.aread()).decode("utf-8", "replace")[:400]
-                    raise LLMError(f"HTTP {response.status_code}: {detail}")
+                status = response.status_code
+                if status != 200:
+                    raise failure("HTTPStatusError")
+                phase = "stream"
 
                 async for line in response.aiter_lines():
                     if not line or not line.startswith("data:"):
                         continue
                     data = line[5:].strip()
                     if data == "[DONE]":
+                        finished = True
                         break
                     try:
                         chunk = json.loads(data)
                     except ValueError:
-                        continue
+                        raise failure("InvalidStreamJSON") from None
+                    if not isinstance(chunk, dict):
+                        raise failure("InvalidStreamEvent")
+                    if chunk.get("error"):
+                        raise failure("ProviderStreamError")
 
                     usage = chunk.get("usage") or {}
                     if usage:
@@ -114,9 +142,9 @@ class LLMClient:
                             completion.finish_reason = choice["finish_reason"]
 
                         text = delta.get("content")
+                        if (text or delta.get("tool_calls")) and completion.first_token_ms is None:
+                            completion.first_token_ms = int((time.perf_counter() - started) * 1000)
                         if text:
-                            if completion.first_token_ms is None:
-                                completion.first_token_ms = int((time.perf_counter() - started) * 1000)
                             completion.text += text
                             yield "text", text
 
@@ -133,8 +161,14 @@ class LLMClient:
                             if function.get("arguments"):
                                 entry.arguments += function["arguments"]
         except httpx.HTTPError as exc:
-            raise LLMError(str(exc)) from exc
+            raise failure(type(exc).__name__) from exc
+        except (TypeError, AttributeError, KeyError, ValueError) as exc:
+            raise failure("InvalidStreamEvent") from exc
 
+        if not finished and completion.finish_reason is None:
+            raise failure("IncompleteStream")
         completion.tool_calls = [partial[key] for key in sorted(partial) if partial[key].name]
+        if not completion.text.strip() and not completion.tool_calls:
+            raise failure("EmptyCompletion")
         completion.elapsed_ms = int((time.perf_counter() - started) * 1000)
         yield "done", completion

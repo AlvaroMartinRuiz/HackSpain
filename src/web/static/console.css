@@ -53,7 +53,7 @@ body {
 .pill b { color: var(--text); font-weight: 500; }
 .pill.warn { border-color: #5a4a1e; color: var(--warn); }
 
-.counters { display: flex; gap: 18px; }
+.counters { display: flex; gap: 18px; flex-wrap: wrap; }
 .counter { text-align: right; }
 .counter b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
 .counter span { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }

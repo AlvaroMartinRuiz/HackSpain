@@ -86,6 +86,19 @@ class LiveCall:
     def duration_s(self) -> float:
         return round(time.monotonic() - self.started_monotonic, 1)
 
+    @property
+    def audio_status(self) -> str:
+        output = self.metrics.get("outbound_audio")
+        if output is None:
+            return "unknown"
+        if output.get("text_mode"):
+            return "not_applicable"
+        if output.get("non_silent_frames", 0) > 0:
+            return "signal"
+        if output.get("complete"):
+            return "silent"
+        return "unknown" if self.ended_at else "pending"
+
     def summary(self) -> dict[str, Any]:
         latencies = self.metrics["response_ms"]
         return {
@@ -114,10 +127,12 @@ class LiveCall:
             "last_caller": _last_said(self.transcript, "caller"),
             "last_agent": _last_said(self.transcript, "agent"),
             "actions": [
-                {"action": s["action"], "accepted": s.get("accepted"), "status": s.get("status")}
+                {"action": s["action"], "accepted": s.get("accepted"), "status": s.get("status"),
+                 "dry_run": bool(s.get("dry_run"))}
                 for s in self.submissions
             ],
             "errors": len(self.errors),
+            "audio_status": self.audio_status,
         }
 
     def _final_duration(self) -> float:
@@ -377,6 +392,10 @@ class CallStore:
         elif kind == "tts":
             if payload.get("first_byte_ms"):
                 call.metrics["tts_first_byte_ms"].append(payload["first_byte_ms"])
+        elif kind == "audio_output":
+            call.metrics["outbound_audio"] = dict(payload)
+        elif kind == "call_started" and payload.get("rehearsal"):
+            call.metrics["outbound_audio"] = {"text_mode": True}
         elif kind == "error":
             call.errors.append({**payload, "ts": _now_iso()})
 
@@ -458,7 +477,7 @@ class CallStore:
         submitted = [call for call in recent if call.submissions]
         accepted = [
             call for call in recent
-            if any(s.get("accepted") for s in call.submissions)
+            if any(s.get("accepted") and not s.get("dry_run") for s in call.submissions)
         ]
         by_activity = {name: 0 for name in ACTIVITIES}
         for call in live:
@@ -470,7 +489,9 @@ class CallStore:
             "recent": len(recent),
             "with_submission": len(submitted),
             "with_accepted_submission": len(accepted),
-            "silent_calls": len([c for c in recent if not c.submissions]),
+            "missing_submission_calls": len([c for c in recent if not c.submissions]),
+            "silent_calls": len([c for c in recent if c.audio_status == "silent"]),
+            "audio_unknown_calls": len([c for c in recent if c.audio_status == "unknown"]),
             "median_response_ms": _median(all_latencies),
             "p90_response_ms": _percentile(all_latencies, 90),
             "by_activity": by_activity,

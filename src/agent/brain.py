@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 import unicodedata
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, Optional
 
 from src.agent import phrases
@@ -40,6 +42,7 @@ class Agent:
             {"role": "system", "content": build_system_prompt(session.catalog, session.from_number)}
         ]
         self._buffer = ""
+        self._round_task: Optional[asyncio.Task] = None
         self._pending_briefings: list[str] = []
         # Matches the session's starting language, so the first real detection is
         # what adds the "current language" note, not the default.
@@ -55,6 +58,7 @@ class Agent:
     async def handle(self, text: str) -> None:
         """One caller turn, start to finish."""
         started = time.perf_counter()
+        generation = self.session._generation
         self.messages.append({"role": "user", "content": text})
         self._trim()
 
@@ -67,11 +71,24 @@ class Agent:
 
         spoke = False
         for round_index in range(settings.llm_max_tool_rounds):
+            if generation != self.session._generation:
+                return
+            self._round_task = asyncio.create_task(self._run_round())
             try:
-                completion = await self._run_round()
+                completion = await self._round_task
+            except asyncio.CancelledError:
+                if generation != self.session._generation and not asyncio.current_task().cancelling():
+                    return
+                raise
             except LLMError as exc:
-                await self.session.record("error", {"where": "llm", "detail": str(exc)})
-                await self.session.say(phrases.pick(phrases.RETRY, self.session.language))
+                self.session._completion_requested = False
+                await self.session.record("error", {**exc.as_dict(), "round": round_index + 1})
+                if generation == self.session._generation:
+                    await self.session.say(phrases.pick(phrases.RETRY, self.session.language))
+                return
+            finally:
+                self._round_task = None
+            if generation != self.session._generation:
                 return
 
             spoke = spoke or bool(completion.text.strip())
@@ -95,6 +112,8 @@ class Agent:
             })
 
             for call in completion.tool_calls:
+                if generation != self.session._generation:
+                    return
                 await self._run_tool(call.id, call.name, call.parsed_arguments())
 
             for briefing in self._pending_briefings:
@@ -117,16 +136,17 @@ class Agent:
         speech_parts: list[str] = []
         completion: Optional[Completion] = None
 
-        async for kind, value in self.llm.stream(self._sound_history(), self.tools.schemas()):
-            if kind == "text":
-                self._buffer += value
-                for sentence in self._drain():
-                    speech_parts.append(sentence)
-                    if _ready_to_speak(speech_parts):
-                        await self.session.say(" ".join(speech_parts))
-                        speech_parts.clear()
-            else:
-                completion = value
+        async with aclosing(self.llm.stream(self._sound_history(), self.tools.schemas())) as stream:
+            async for kind, value in stream:
+                if kind == "text":
+                    self._buffer += value
+                    for sentence in self._drain():
+                        speech_parts.append(sentence)
+                        if _ready_to_speak(speech_parts):
+                            await self.session.say(" ".join(speech_parts))
+                            speech_parts.clear()
+                else:
+                    completion = value
 
         tail = self._buffer.strip()
         if tail:
@@ -181,6 +201,7 @@ class Agent:
         try:
             result = await self.tools.dispatch(name, arguments)
         except Exception as exc:  # a broken tool must not take the call with it
+            self.tools.completion_blocked = True
             result = {"error": f"{type(exc).__name__}: {exc}"}
             await self.session.record("error", {"where": f"tool:{name}", "detail": str(exc)})
 
@@ -231,8 +252,17 @@ class Agent:
         self.messages.append({"role": "assistant", "content": text})
         self._trim()
 
+    @property
+    def is_responding(self) -> bool:
+        return self._round_task is not None and not self._round_task.done()
+
     def note_interruption(self, spoken_so_far: str) -> None:
         """Record only what the caller actually heard before cutting in."""
+        if self.is_responding:
+            self._round_task.cancel()
+            if spoken_so_far:
+                self.messages.append({"role": "assistant", "content": spoken_so_far})
+            return
         for index in range(len(self.messages) - 1, -1, -1):
             message = self.messages[index]
             if message.get("role") != "assistant" or not message.get("content"):

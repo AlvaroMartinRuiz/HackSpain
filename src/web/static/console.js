@@ -51,7 +51,9 @@ function renderStats(stats) {
   el("stat-live").textContent = stats.live ?? 0;
   el("stat-peak").textContent = stats.peak_concurrency ?? 0;
   el("stat-latency").textContent = stats.median_response_ms ? `${stats.median_response_ms} ms` : "–";
-  el("stat-silent").textContent = stats.silent_calls ?? 0;
+  el("stat-missing").textContent = stats.missing_submission_calls ?? "–";
+  el("stat-silent").textContent = stats.missing_submission_calls == null ? "–" : (stats.silent_calls ?? "–");
+  el("stat-audio-unknown").textContent = stats.audio_unknown_calls ?? "–";
 }
 
 // ---- call lists -----------------------------------------------------
@@ -206,6 +208,9 @@ function renderTabs() {
   el("tab-decisions").innerHTML = (detail.decisions || []).length
     ? (detail.decisions || []).map(decisionRow).join("")
     : '<div class="entry"><div class="trace">Todavía sin decisiones.</div></div>';
+  const errors = Array.isArray(detail.errors) ? detail.errors : [];
+  if (errors.length) el("tab-decisions").innerHTML +=
+    `<div class="group-label">Errores</div>${errors.map(diagnosticRow).join("")}`;
 
   el("tab-tools").innerHTML = (detail.tool_calls || []).length
     ? (detail.tool_calls || []).map(toolRow).join("")
@@ -214,12 +219,23 @@ function renderTabs() {
   const submissions = detail.submissions || [];
   const clinic = (detail.clinic_calls || []).slice(-12);
   el("tab-record").innerHTML =
+    '<div class="entry"><div class="trace">Acuses de envío, no resultados puntuados. Resultado oficial: no cargado. Los ensayos son locales.</div></div>' +
     (submissions.length
       ? submissions.map(submissionRow).join("")
       : '<div class="entry"><div class="trace">Nada enviado todavía.</div></div>') +
     (clinic.length
       ? `<div class="group-label">Consultas al EHR</div>` + clinic.map(clinicRow).join("")
       : "");
+}
+
+function diagnosticRow(error) {
+  const metadata = {};
+  for (const key of ["error_type", "phase", "http_status", "elapsed_ms", "first_token_ms", "output_started", "round", "model"]) {
+    if (error[key] !== undefined) metadata[key] = error[key];
+  }
+  return `<div class="entry"><div class="head"><b class="reason">${escapeHtml(error.where || "error")}</b></div>
+    <div class="trace">${escapeHtml(error.detail || error.error_type || "Sin detalle registrado")}</div>
+    <pre>${escapeHtml(pretty(metadata))}</pre></div>`;
 }
 
 function decisionRow(decision) {
@@ -251,7 +267,7 @@ function submissionRow(submission) {
   const retries = submission.attempts > 1 ? ` · ${submission.attempts} intentos` : "";
   return `<div class="entry">
     <div class="head"><b class="${cls === "ok" ? "stage" : "reason"}">${escapeHtml(submission.action)}</b>
-    <span class="ms">HTTP ${submission.status} · ${submission.elapsed_ms ?? "?"} ms${retries}</span></div>
+    <span class="ms">${submission.dry_run ? "Ensayo local" : `HTTP ${submission.status}`} · ${submission.elapsed_ms ?? "?"} ms${retries}</span></div>
     <pre>${escapeHtml(pretty(submission.payload))}</pre>
   </div>`;
 }
@@ -312,6 +328,10 @@ function applyEvent(message) {
     case "submit":
       detail.submissions = detail.submissions || [];
       detail.submissions.push(payload);
+      break;
+    case "error":
+      if (!Array.isArray(detail.errors)) detail.errors = [];
+      detail.errors.push({ ...payload, ts: event.ts });
       break;
     case "patient_identified":
       detail.patient_full = payload.patient;
