@@ -39,3 +39,11 @@
 - The current API allows only simulation and read-only-clinic practice. Live cutover is intentionally locked even if `V2_ALLOW_SUBMISSIONS` is set; carrier acceptance, clinic-rule parity, actual language/voice validation, and explicit release approval are still required.
 - Build a container from the repository root with `docker build -f v2/Dockerfile -t socket-wizard-v2 .`. The Dockerfile-specific ignore file excludes secrets, old recordings, environments, and runtime data. A running Docker daemon is required; provider keys must be injected at runtime, not baked into the image.
 - Run records include a code/catalog fingerprint, configuration manifest, typed action receipts, and distinct fixture/model/official grade provenance. Audio observations mean successful socket sends, not proof of caller playback. SQLite/local WAV storage is the local bootstrap; production Postgres/object storage and automatic improvement promotion are separate future gates.
+
+# Parallel v2 collaboration
+
+- Functional stock-voice product first; voice cloning is the final enhancement.
+- Before parallel work, read `docs/V2-PARALLEL-WORK.md` and the authoritative `docs/V2-STATUS.md` on the integration branch. Claim a lane and use its assigned paths and frozen launch SHA. Use separate worktrees/clones; never have several agents switching branches in the same directory.
+- Push intermediate checkpoints after each meaningful code/test increment rather than waiting for the whole task. Do not create empty commits after read-only commands, stage secrets/runtime data, force-push shared branches, or merge to `main` without explicit approval.
+- Lane PRs target `feat/voice-v2`. Only the coordinator updates the shared status board and merges the integration branch. Report test results, contract requests, blockers and costs in the lane's draft PR.
+- Parallel coding/offline verification does not authorize parallel paid tests. One coordinator reserves and runs paid checks against the shared $30 effort budget; worktree-local ledgers do not enforce an account-wide cap.
