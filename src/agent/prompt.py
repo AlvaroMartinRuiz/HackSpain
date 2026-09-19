@@ -51,6 +51,7 @@ If you do not have it, call the tool. If a tool gives you nothing, say so plainl
 CLINIC_FACTS = """\
 ## The clinic, for answering questions
 Sites: {sites}
+Opening hours: {hours}
 Specialties: {specialties}
 Doctors: {providers}
 Closed: Sundays everywhere, and {closures}. Only Arenal Centro opens on a Saturday.
@@ -68,6 +69,18 @@ def build_system_prompt(catalog: Catalog, from_number: Optional[str]) -> str:
     return header + "\n" + CLINIC_FACTS.format(
         sites="; ".join(
             f"{loc.name} ({loc.id}) at {loc.address}" for loc in catalog.locations.values()
+        ),
+        # The model answers hours from memory rather than calling clinic_facts,
+        # and a plausible guess is wrong exactly where the traps are (Sur shuts
+        # Friday at 14:00). So the real hours are in front of it.
+        hours="; ".join(
+            f"{loc.name}: " + ", ".join(
+                f"{day[:3]} " + " & ".join(
+                    f"{s.isoformat(timespec='minutes')}-{e.isoformat(timespec='minutes')}" for s, e in spans
+                )
+                for day, spans in loc.hours.items()
+            )
+            for loc in catalog.locations.values()
         ),
         specialties="; ".join(
             f"{s.name} ({s.id})" + (" — needs a referral" if s.referral_required else "")
