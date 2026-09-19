@@ -597,7 +597,7 @@ async def run_voice(socket, stream_sid: str, controller: CallController, config:
         if tape.protocol_errors:
             controller.store.event(controller.state.run_id, "protocol_error", {"count": tape.protocol_errors})
         try:
-            controller.store.event(controller.state.run_id, "audio_output", tape.save())
+            controller.store.event(controller.state.run_id, "audio_output", tape.save(finalized=True))
         except OSError as exc:
             controller.store.event(controller.state.run_id, "audio_recording_error", {"type": type(exc).__name__})
         controller.store.save(controller.state)

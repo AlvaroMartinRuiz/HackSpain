@@ -31,7 +31,16 @@ Both run `python -m v2`. The default port is 7861. `GET /health` reports missing
 
 Open `http://127.0.0.1:7861/`. Enter the operator token in the dashboard. Protected HTTP endpoints and the carrier `/ws` use `X-V2-Token`. Do not put long-lived tokens in query strings.
 
-The current delivery does not authorize deployment or replacement of an existing remote endpoint. A carrier integration must send the configured authentication header and use mono 8 kHz mu-law Twilio messages.
+The current delivery does not authorize deployment or replacement of an existing remote endpoint. A carrier integration must send the configured authentication header and use mono 8 kHz mu-law Twilio messages. Live carrier mode is gated by both `V2_ALLOW_SUBMISSIONS=true` and `V2_RELEASE_APPROVED=true`; set neither until acceptance tests and explicit release approval are complete. Browser and text sessions can select only simulation or read-only practice, even when the carrier is live.
+
+## Operator flows
+
+- The dashboard polls `GET /api/runs` for bounded, paginated history and `GET /api/runs/{run_id}` for evidence.
+- Natural text sessions use `POST /api/sessions/text`, `POST /api/sessions/{run_id}/turn`, and `DELETE /api/sessions/{run_id}`. These spend model credits; the scripted fixture does not.
+- Microphone calling requests `POST /api/voice/ticket`. The 30-second, single-use ticket is sent as a WebSocket subprotocol to `/ws/browser`, never as a query parameter. Tickets are bound to the browser origin and a server-generated call identity.
+- Same-origin browsers work by default. `V2_ALLOWED_ORIGINS` permits explicit additional origins; do not use a wildcard. `V2_MAX_VOICE_CALLS` sets bounded voice admission (default four, maximum twenty).
+- Protected recordings are fetched using the operator header and played using local blob URLs. Locking clears the token, private data, and microphone resources.
+- Abandoned text sessions expire after fifteen minutes. An in-flight turn must finish before explicit session closure.
 
 ## Offline checks
 

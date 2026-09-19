@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -26,6 +27,14 @@ class StandaloneTests(unittest.TestCase):
         manifest = Config().manifest()
         self.assertEqual(len(manifest["code_sha256"]), 64)
         self.assertFalse(manifest["voice_clone"])
+
+    def test_external_catalog_is_fingerprinted_without_exposing_its_path(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "clinic.json"
+            path.write_text('{"clinic": {}}', encoding="utf-8")
+            manifest = replace(Config(), catalog_path=path).manifest()
+            self.assertEqual(len(manifest["code_sha256"]), 64)
+            self.assertNotIn(folder, str(manifest))
 
     def test_launchers_and_container_only_start_v2(self):
         for name in ("run.ps1", "run.sh"):

@@ -11,6 +11,8 @@
 - `.venv-v2/Scripts/python scripts/check_domain.py` verifies deterministic scheduling/identity/date rules offline.
 - `.venv-v2/Scripts/python -m v2.evaluation --language es --database :memory:` runs an offline synthetic two-intent fixture; `en` and `ca` are also supported.
 - `.venv-v2/Scripts/python -m pip check` checks Python dependencies.
+- `.venv-v2/Scripts/node.exe --test v2/tests/ui/core.test.mjs v2/tests/ui/voice.test.mjs v2/tests/ui/structure.test.mjs` runs offline UI/audio helpers and structure checks on Windows.
+- `.venv-v2/Scripts/python -m v2.tests.ui.browser_smoke --browser "C:/Program Files/Google/Chrome/Application/chrome.exe"` runs a real headless-browser smoke with an ephemeral local server, fake operator token, in-memory database, and paid providers disabled. It checks authentication, three language fixtures, history, paid gating, desktop/mobile overflow and logout without deploying the application.
 - In `services/jev`, run `npm ci`, `npm run check`, and `npm test` with Node >=22.18. If Node is absent, a local `nodejs-wheel==22.20.0` installation provides Node/npm without changing machine-wide configuration.
 - `scripts/check_engine.py` and `scripts/smoke_test.py` are real clinic READ checks, not offline tests. `scripts/mock_call.py` uses configured voice providers and may spend credits. Do not run them under an offline-only label.
 - A container build is `docker build -f v2/Dockerfile -t socket-wizard-v2 .`; a running Docker daemon is required. Runtime secrets/data must remain outside the image.

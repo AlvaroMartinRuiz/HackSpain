@@ -105,14 +105,14 @@ class RunTape:
         buf.extend(b"\xff" * (offset - len(buf)))
         buf.extend(payload[:max(0, self.cap - len(buf))])
 
-    def save(self) -> dict:
+    def save(self, *, finalized: bool = False) -> dict:
         folder = self.root / "audio" / self.run_id
         folder.mkdir(parents=True, exist_ok=True)
         for name, data in self.tracks.items():
             with (folder / f"{name}.wav").open("wb") as handle:
                 handle.write(ulaw_to_wav(bytes(data)))
         return {"frames": dict(self.frames), "outbound_non_silent_frames": self.signal_frames,
-                "first_signal_ms": self.first_signal_ms,
+                "first_signal_ms": self.first_signal_ms, "finalized": finalized,
                 "audio_status": "signal_sent" if self.signal_frames else "silent",
                 "observation": "socket_send_completed_not_playback_acknowledged"}
 

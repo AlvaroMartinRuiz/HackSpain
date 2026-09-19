@@ -18,7 +18,7 @@ python3 -m venv .venv-v2
 bash run.sh
 ```
 
-The console is at `http://127.0.0.1:7861/`. The carrier endpoint is `/ws`, using Twilio Media Streams format without a Twilio account.
+The console is at `http://127.0.0.1:7861/`. It supports run history, transcript/action/error inspection, protected recordings, offline fixtures, natural text sessions, and microphone calls. The carrier endpoint is `/ws`, using Twilio Media Streams format without a Twilio account. Browser voice uses a short-lived, origin-bound ticket at `/ws/browser`.
 
 Populate the untracked `v2/.env` from `v2/.env.example`. It overrides the root `.env`. Never commit credentials or recordings. Operator requests use `X-V2-Token`; tokens must not be placed in URLs.
 

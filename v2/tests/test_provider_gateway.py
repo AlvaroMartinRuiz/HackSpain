@@ -81,7 +81,8 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                 "appointment_id": "selectable", "provider_name": "Doctor Demo", "when": "tomorrow",
                 "policy_id": "PRIVATE-POLICY"}]},
             criteria={"appointment_when": "Monday", "when": "Friday", "insurers": ["Plan Demo"],
-                      "part_of_day": "afternoon", "clinician_language": "ca", "token": "PRIVATE"},
+                      "part_of_day": "afternoon", "time_of_day": "16:30", "appointment_time": "10:00",
+                      "clinician_language": "ca", "token": "PRIVATE"},
             constraints={"when": "Friday", "location_id": "norte", "patient_id": "PRIVATE"},
             registration_inputs={"given_name": "Demo", "token": "PRIVATE"},
             registration_fields={"first_surname": "Demo", "token": "PRIVATE"},
@@ -107,7 +108,8 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(intent["registration_inputs"], {"given_name": "Demo"})
             self.assertEqual(intent["registration_fields"], {"first_surname": "Demo"})
             self.assertEqual(intent["criteria"], {"appointment_when": "Monday", "when": "Friday", "insurers": ["Plan Demo"],
-                                                "part_of_day": "afternoon", "clinician_language": "ca"})
+                                                "part_of_day": "afternoon", "time_of_day": "16:30",
+                                                "appointment_time": "10:00", "clinician_language": "ca"})
             self.assertEqual(intent["validation_errors"], {"phone": "invalid", "when": "invalid"})
             self.assertEqual(intent["missing_fields"], ["phone", "identity"])
             self.assertEqual(intent["choices"], [{"doctor": "Doctor Demo"}])

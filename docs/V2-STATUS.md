@@ -10,7 +10,7 @@ The status board on `feat/voice-v2` is authoritative. Copies on task branches ar
 - Active implementation launch revision: `b32caed`. Five isolated agent worktrees were created from this status-only successor to `f41167e`; the runtime baseline is unchanged.
 - Coordination plan: [V2-PARALLEL-WORK.md](V2-PARALLEL-WORK.md).
 - Assignment mode: five parallel implementation agents with isolated worktrees; coordinator owns integration and serial paid validation. The user explicitly requested removal of v1 and code delivery without deployment.
-- V2 remains a lab/practice implementation; no live cutover or scored submission has been enabled.
+- V2 is now the sole application. Shared domain/client/audio utilities have been migrated and v1 removed in `df00253`. Operator text and browser voice APIs, the dashboard, provider adapters and persistent evaluation/history are integrated. Simulation/practice remain the defaults; live carrier operation requires explicit submission and release-approval flags. No deployment, paid provider acceptance or scored submission has occurred.
 - Provider credentials were supplied separately to the coordinator. Values do not belong in this repository or lane briefs. Real provider/deployment checks are still required; gateway access is not equivalent to Vercel deployment access.
 - API spend from this checkpointing/planning work: $0. Teammates' unrelated account activity is not measured here. Total previously authorized effort budget remains $30.
 
@@ -18,12 +18,12 @@ The status board on `feat/voice-v2` is authoritative. Copies on task branches ar
 
 | Lane | Owner | Branch | State | Next checkpoint |
 | --- | --- | --- | --- | --- |
-| A — Conversation/domain | Domain agent | `v2/devin-domain` | Implementing | Six outcomes, partial collection, corrections and confirmation tests |
-| B — Realtime voice | Voice agent | `v2/devin-voice` | Implementing | Pipecat transport, cancellation and actual presentation tests |
-| C — Gateway/Jev | Gateway agent | `v2/devin-gateway` | Implementing | Bounded provider adapters and Jev contract regressions |
-| D — Operator UI | Dashboard agent | `v2/devin-dashboard` | Implementing | Real run inspection, natural text sessions and microphone calling |
-| E — Evals/data | Evaluation agent | `v2/devin-evals` | Implementing | Persistent run listing, outcome fixtures and honest metrics |
-| F — Integration/release | Coordinator | `feat/voice-v2` | Migrating shared code and removing approved v1 files | Standalone v2 verification, API/auth/browser-ticket integration |
+| A — Conversation/domain | Domain agent / coordinator verification | `v2/devin-domain` | Final verification | Incremental collection, six outcomes, corrections and confirmation tests |
+| B — Realtime voice | Voice agent / coordinator verification | `v2/devin-voice` | Integrated `bade0e0` | 30 offline voice/audio tests passed before integration |
+| C — Gateway/Jev | Gateway agent / coordinator verification | `v2/devin-gateway` | Integrated `7156e43` | 18 Python and 15 Jev tests plus TypeScript check passed |
+| D — Operator UI | Dashboard agent / coordinator verification | `v2/devin-dashboard` | Integrated `d0082d1` | 41 offline UI tests and coordinator-run real Chrome smoke passed |
+| E — Evals/data | Evaluation agent / coordinator verification | `v2/devin-evals` | Integrated `1a2083e` | 62 lane Python tests and 18 outcome/language fixtures passed |
+| F — Integration/release | Coordinator | `feat/voice-v2` | API/browser integration verified | 123 assembled Python tests; authenticated sessions, single-use tickets, terminal status and audio-finalization fixes |
 | Voice cloning | Deferred | Not assigned | After functional release | Owner recordings and explicit clone provisioning |
 
 ## Checkpoint log
@@ -35,7 +35,7 @@ The status board on `feat/voice-v2` is authoritative. Copies on task branches ar
 
 ## Integration queue
 
-Five agents are implementing their assigned lanes; no lane checkpoint has been integrated yet. The standalone migration/removal checkpoint passes 37 offline v2 tests, all deterministic domain checks, dependency checks, and the offline asset-list check. No paid requests or deployments were made. Integration order:
+Four tested lanes are integrated; the domain lane is finishing coordinator verification. The current assembled checkpoint passes 123 Python tests, 41 UI tests, 15 Jev tests with TypeScript checking, and a real headless Chrome smoke at desktop/mobile widths. The standalone migration passed all deterministic domain checks. Paid verification remains blocked on main-workspace credentials; Docker build verification is unavailable because Docker is not installed. No paid requests or deployments were made. Remaining integration order:
 
 1. A0/E0/F0 contract and fixture checkpoints.
 2. C gateway adapters and A workflow increments: validate functional text interaction.

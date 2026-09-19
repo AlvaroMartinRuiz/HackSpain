@@ -111,6 +111,12 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value["mark"]["name"], "v2-1")
         self.assertIsNone(payload)
 
+    def test_saved_audio_is_finalized_only_when_explicitly_finished(self):
+        with tempfile.TemporaryDirectory() as root:
+            tape = RunTape(Path(root), "finalized")
+            self.assertFalse(tape.save()["finalized"])
+            self.assertTrue(tape.save(finalized=True)["finalized"])
+
     def test_tape_cap_and_digital_silence(self):
         with tempfile.TemporaryDirectory() as root:
             tape = RunTape(Path(root), "bounded")

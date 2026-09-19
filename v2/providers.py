@@ -45,7 +45,7 @@ JEV_MODEL = "typesafe-ai/jev"
 QUESTION_NAMES = frozenset({"unanswered_request", "repeated_question", "premature_success"})
 CARRIED_FIELDS = frozenset({"specialty_id", "when", "doctor_name", "location_id", "appointment_id",
                             "appointment_when", "appointment_doctor_name", "appointment_location_id",
-                            "part_of_day", "insurers", "clinician_language", "insurer", "insurance_plan",
+                            "part_of_day", "time_of_day", "appointment_time", "insurers", "clinician_language", "insurer", "insurance_plan",
                             "alternate_insurer", "self_pay", "has_referral"})
 USAGE_KEYS = frozenset({"prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "output_tokens",
                         "inputTokens", "outputTokens", "totalTokens"})

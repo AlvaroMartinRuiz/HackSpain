@@ -75,7 +75,8 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
     async def test_interpreter_is_bounded_and_requests_typed_output(self):
         def answer(request):
             body = json.loads(request.content)
-            self.assertEqual(body["response_format"]["type"], "json_object")
+            self.assertEqual(body["response_format"]["type"], "json_schema")
+            self.assertTrue(body["response_format"]["json_schema"]["strict"])
             self.assertLessEqual(body["max_tokens"], 1800)
             self.assertNotIn("tools", body)
             return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {
@@ -104,7 +105,9 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         def answer(request):
             payload = json.loads(request.content)
             self.assertEqual(payload["question_pack"], "conversation-v1")
-            return httpx.Response(200, json={"run_id": payload["run_id"], "question_pack": "conversation-v1",
+            return httpx.Response(200, json={"schema_version": 1, "source": "model_assessment",
+                                            "model": "typesafe-ai/jev", "official_grade": None,
+                                            "run_id": payload["run_id"], "question_pack": "conversation-v1",
                                             "answers": {name: {"type": "boolean", "probability": 0.1}
                                                         for name in ("unanswered_request", "repeated_question", "premature_success")}})
         async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
