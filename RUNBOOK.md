@@ -93,6 +93,20 @@ antes de entregarlo:
 .\.venv\Scripts\python scripts\mock_call.py --url wss://tu-nombre.ngrok-free.app/ws
 ```
 
+### La consola a través del túnel
+
+ngrok publica el puerto entero, y la consola enseña teléfonos, fichas,
+transcripciones y grabaciones. Por eso, a través del túnel pide `CONSOLE_TOKEN`
+(del `.env`). Ábrela una vez así y una cookie te mantiene dentro dos días:
+
+```
+https://tu-nombre.ngrok-free.app/?token=<CONSOLE_TOKEN>
+```
+
+Sin token responde 401. `/ws` y `/health` no lo necesitan (la plataforma solo usa
+`/ws`), y en `http://localhost:7860/` desde la propia máquina tampoco. No
+compartas la URL con el token fuera del equipo.
+
 ## Voz: Aura para practicar, ElevenLabs para puntuar
 
 El default es Aura (`TTS_PROVIDER=deepgram`): misma clave que el transcriptor,
