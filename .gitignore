@@ -17,3 +17,7 @@ data/calls.db
 data/calls.db-*
 data/recordings/
 
+# Server output when it is started detached.
+server.out
+server.err
+

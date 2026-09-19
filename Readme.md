@@ -16,14 +16,26 @@ Un servidor WebSocket que habla Twilio Media Streams, con una consola en vivo
 sobre el mismo puerto.
 
 ```powershell
+# Windows
 .\.venv\Scripts\python -m pip install -r requirements.txt
 .\.venv\Scripts\python scripts\check_domain.py    # núcleo determinista
 .\.venv\Scripts\python scripts\check_engine.py    # contra la clínica real
 .\run.ps1
 ```
 
+```bash
+# macOS / Linux
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python scripts/check_domain.py
+./.venv/bin/python scripts/check_engine.py
+bash run.sh
+```
+
 - Consola: <http://localhost:7860/>
 - Endpoint de llamadas: `ws://localhost:7860/ws` (`wss://` a través de ngrok)
+
+Falta el `.env`, que no está en el repo: pídeselo al equipo. El montaje completo
+en una máquina nueva está en [RUNBOOK.md](./RUNBOOK.md).
 
 El principio de diseño: **el modelo conduce la conversación, el código decide el
 registro.** Ningún id, minuto, tipo de cita, póliza ni motivo de rechazo sale de

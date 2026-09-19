@@ -397,33 +397,42 @@ Orden sugerido por la documentación:
 
 ## 10. Estado de nuestro repo
 
+El agente está construido. Cómo, y qué resuelve cada pieza, está en
+[ARCHITECTURE.md](./ARCHITECTURE.md); cómo arrancarlo, en [RUNBOOK.md](./RUNBOOK.md).
+
 | Componente | Estado |
 |---|---|
-| `.env` con API key | ✅ |
-| Servidor REST local (`src/main.py`) | ✅ (placeholder) |
-| WebSocket Twilio Media Streams | ❌ **Falta — esto es el core** |
-| Pipeline voz (Pipecat STT/LLM/TTS) | ❌ |
-| Cliente API clínica real | ❌ (mock en `clinic.py`) |
-| Submit actions (`/submit/*`) | ❌ |
-| ngrok + registro dashboard | ❌ |
+| WebSocket Twilio Media Streams (`/ws`) | ✅ `src/telephony` |
+| Pipeline de voz propio (Deepgram → LLM → ElevenLabs) | ✅ `src/voice`, sin Pipecat |
+| Cliente del EHR real | ✅ `src/platform_api/client.py` |
+| Motor determinista (huecos, reglas, rechazos) | ✅ `src/domain` |
+| Submits `/submit/*` con reintentos | ✅ dentro de la ventana de 30 s |
+| Consola en vivo + histórico en SQLite | ✅ `src/obs`, `src/web` |
+| Ensayo en texto y arnés de escenarios | ✅ `scripts/rehearse.py` |
+| ngrok + endpoint registrado en el dashboard | ⚠️ por sesión, no vive en el repo |
 
 ### Variables de entorno
 
+Todas están en [.env.example](./.env.example), que es la referencia buena. Las
+que no se pueden adivinar:
+
 ```env
-PLATFORM_API_KEY=pk-...
-PLATFORM_API_BASE_URL=https://<host del desk>
-PORT=7860
+PLATFORM_API_KEY=pk-...          # del desk
+PLATFORM_API_BASE_URL=https://hackspain.getprosperapp.com/api/v1
+DEEPGRAM_API_KEY=                # sin ella no hay barge-in, se cae a Whisper
+LLM_API_KEY=                     # sin ella no hay agente
+LLM_BASE_URL=                    # el gateway, si se usa uno
+LLM_EXTRA_HEADERS=               # p. ej. cf-aig-gateway-id: <id> en Cloudflare
+ELEVENLABS_API_KEY=
 ```
 
-### Próximos pasos técnicos
+### Qué falta
 
-1. Obtener `PLATFORM_API_BASE_URL` del desk (puede no ser `voice.getprosperapp.com`)
-2. Montar WebSocket `/ws` con protocolo Twilio Media Streams
-3. Integrar Pipecat (o equivalente) para STT → LLM → TTS
-4. Cliente HTTP al EHR (`directory`, `availability`, catálogo)
-5. Lógica de tools + submit al colgar cada llamada
-6. ngrok → registrar `wss://…/ws` en dashboard
-7. Practice call en problema 1
+1. Repartir el `.env` al resto del equipo por un canal privado. El repo ya
+   arranca en cualquier máquina (`run.ps1` / `run.sh`, versiones clavadas), y
+   las claves son lo único que sigue viviendo en un solo portátil.
+2. Escenarios de ensayo para el problema 12 (ruido), que necesita audio real.
+3. Un Run All con margen antes del cierre del domingo a las 06:00.
 
 ---
 

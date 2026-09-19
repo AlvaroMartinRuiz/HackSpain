@@ -116,3 +116,14 @@ async def platform_check() -> JSONResponse:
         return JSONResponse({"platform_reachable": False, "detail": str(exc)}, status_code=502)
     finally:
         await client.aclose()
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "src.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=settings.reload,
+    )

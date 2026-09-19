@@ -1,23 +1,70 @@
 # Guion del fin de semana
 
-## Poner una llamada en pie
+## Desde cero en una máquina nueva
+
+Python 3.11 o más nuevo. Nosotros corremos 3.14 y no hace falta igualarlo: en la
+ruta configurada (Deepgram para escuchar y para hablar) el audio viaja en µ-law
+de punta a punta y no pasa por `audioop`, que es lo único que cambió en 3.13.
 
 ```powershell
-# 1. Dependencias (una vez)
+# Windows
+py -3 -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
-
-# 2. Claves: copia .env.example a .env y rellena
-#    PLATFORM_API_KEY ya está. Faltan DEEPGRAM_API_KEY, LLM_API_KEY, ELEVENLABS_API_KEY.
-
-# 3. Comprobar que el núcleo está sano (no gasta nada, no usa modelo)
-.\.venv\Scripts\python scripts\check_domain.py
-.\.venv\Scripts\python scripts\check_engine.py
-
-# 4. Arrancar
-.\run.ps1
-#    consola  -> http://localhost:7860/
-#    endpoint -> ws://localhost:7860/ws
 ```
+
+```bash
+# macOS / Linux
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+```
+
+Las versiones de `requirements.txt` están clavadas a las que hemos probado. No
+las sueltes este fin de semana: dos portátiles con dos stacks distintos es el
+fallo que nadie consigue depurar a las cuatro de la mañana.
+
+Después, las claves. `.env` no está en el repo y no puede estarlo, así que
+**pídeselo a alguien del equipo por un canal privado** en vez de reconstruirlo.
+Si aun así toca reconstruirlo, `.env.example` tiene todos los nombres y qué hace
+cada uno; las que no se adivinan son `PLATFORM_API_KEY`, `DEEPGRAM_API_KEY`,
+`LLM_API_KEY` y `ELEVENLABS_API_KEY`.
+
+Comprobar que el núcleo está sano — no gasta cuota y no usa modelo:
+
+```powershell
+.\.venv\Scripts\python scripts\smoke_test.py     # la clave y el host responden
+.\.venv\Scripts\python scripts\check_domain.py   # fechas, DNI, tipos, cierres
+.\.venv\Scripts\python scripts\check_engine.py   # el motor contra la clínica real
+```
+
+En macOS y Linux es el mismo comando con `./.venv/bin/python scripts/...`, y eso
+vale para todos los scripts del resto de este documento.
+
+## Arrancar
+
+```powershell
+.\run.ps1      # Windows
+```
+
+```bash
+bash run.sh    # macOS / Linux
+```
+
+- consola  → <http://localhost:7860/>
+- endpoint → `ws://localhost:7860/ws`
+
+Los dos arrancan lo mismo (`python -m src.main`) y leen `HOST`, `PORT` y
+`RELOAD` de `.env`, así que el puerto que anuncia la consola es siempre el
+puerto en el que está escuchando. Está en pie cuando `/health` contesta:
+
+```json
+{"status": "ok", "voice_ready": true, "missing_keys": []}
+```
+
+`missing_keys` con algo dentro es un `.env` incompleto, y el agente se quedará
+mudo justo en esa parte de la llamada.
+
+**`RELOAD=true` sólo mientras editas.** Vigila el árbol y reinicia al guardar,
+que durante un Run All es tirar las diez llamadas vivas a la vez.
 
 ## Exponerlo
 

@@ -1,0 +1,13 @@
+# core.autocrlf is set per machine, so say it here instead and stop guessing.
+* text=auto
+
+# A shell script with CRLF dies as "bad interpreter: /usr/bin/env bash^M" on the
+# one laptop that is not Windows. These stay LF wherever they are checked out.
+*.sh text eol=lf
+
+# PowerShell is the opposite case.
+*.ps1 text eol=crlf
+
+# Not text. Never touch them.
+*.wav binary
+*.db binary
