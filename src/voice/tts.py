@@ -10,18 +10,80 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import AsyncIterator, Optional
 
 import httpx
 
+from src.agent import phrases
 from src.config import settings
 from src.voice.audio import pcm16_to_ulaw, resample_pcm16, silence
 
 log = logging.getLogger("elturno")
 
-# ElevenLabs Creator allows 10 concurrent Flash requests.
-_TTS_GATE = asyncio.Semaphore(10)
+# One gate per account, because each has its own limit: when ElevenLabs is full
+# the fallback to Aura must not queue behind it. Creator allows 10 concurrent
+# Flash requests.
+_GATES = {
+    "ElevenLabsSynthesizer": asyncio.Semaphore(int(os.getenv("ELEVENLABS_CONCURRENCY", "10"))),
+    "DeepgramSynthesizer": asyncio.Semaphore(int(os.getenv("DEEPGRAM_TTS_CONCURRENCY", "15"))),
+}
+_OPEN_GATE = asyncio.Semaphore(50)
 _SUPPORTED_ELEVENLABS_LANGUAGES = {"en", "es"}
+
+# Audio for the lines that never change (greeting, silence prompts, retry and
+# hold), synthesised once. Written at start-up or on first use and never
+# modified, so sharing it between calls shares no call state. The key carries
+# the voice settings, so a changed voice never plays a stale recording.
+_AUDIO_CACHE: dict[tuple, bytes] = {}
+
+
+def _gate(synth: "Synthesizer") -> asyncio.Semaphore:
+    return _GATES.get(type(synth).__name__, _OPEN_GATE)
+
+
+def _cache_key(text: str, language: str) -> tuple:
+    return (settings.tts_provider, settings.elevenlabs_voice_id, settings.elevenlabs_model,
+            settings.deepgram_tts_model_es, settings.deepgram_tts_model_en,
+            (language or "")[:2], text)
+
+
+def is_fixed_line(text: str) -> bool:
+    if text == settings.greeting:
+        return True
+    return any(text in phrases.fixed_lines(code) for code in phrases.SILENCE_PROMPTS)
+
+
+def cached_audio(text: str, language: str) -> Optional[bytes]:
+    return _AUDIO_CACHE.get(_cache_key(text, language))
+
+
+def remember_audio(text: str, language: str, audio: bytes) -> None:
+    if audio and is_fixed_line(text):
+        _AUDIO_CACHE[_cache_key(text, language)] = audio
+
+
+async def warm_cache() -> int:
+    """Synthesise the fixed lines before the first call needs them.
+
+    Ten calls of a Run All greet in the same second; with the greeting cached
+    that burst never reaches the TTS provider. Catalan is left to first use.
+    """
+    synth = build_synthesizer()
+    warmed = 0
+    try:
+        jobs = [(settings.greeting, settings.default_language)]
+        for code in ("en", "es"):
+            jobs += [(line, code) for line in phrases.fixed_lines(code) if line]
+        for text, language in jobs:
+            if cached_audio(text, language):
+                continue
+            audio = b"".join([chunk async for chunk in synth.stream(text, language)])
+            remember_audio(text, language, audio)
+            warmed += 1
+    finally:
+        await synth.aclose()
+    return warmed
 
 
 class Synthesizer:
@@ -203,7 +265,7 @@ class ResilientSynthesizer(Synthesizer):
             for attempt in range(attempts):
                 got_audio = False
                 try:
-                    async with _TTS_GATE:
+                    async with _gate(synth):
                         async for chunk in synth.stream(text, language):
                             got_audio = True
                             yield chunk

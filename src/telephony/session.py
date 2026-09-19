@@ -21,7 +21,7 @@ from src.domain.engine import SchedulingEngine
 from src.obs.store import CallStore
 from src.obs import tape
 from src.platform_api.client import PlatformClient, SubmitResult
-from src.voice import audio
+from src.voice import audio, tts
 from src.voice.stt import build_transcriber
 from src.voice.tts import Synthesizer, build_synthesizer
 
@@ -313,6 +313,12 @@ class CallSession:
         started = time.perf_counter()
         first_byte_ms: Optional[int] = None
         total = 0
+        cached = tts.cached_audio(text, language)
+        if cached:
+            await self._audio_queue.put((generation, text, cached))
+            await self.record("tts", {"text": text, "bytes": len(cached), "cached": True})
+            return
+        keep = [] if tts.is_fixed_line(text) else None
         # Barge-in during synthesis comes from is_speaking counting
         # _synthesizing. _speaking_since stays "audio is on the line": the
         # player keys the start of an utterance off it.
@@ -323,11 +329,15 @@ class CallSession:
                 if first_byte_ms is None:
                     first_byte_ms = int((time.perf_counter() - started) * 1000)
                 total += len(chunk)
+                if keep is not None:
+                    keep.append(chunk)
                 await self._audio_queue.put((generation, text, chunk))
         except Exception as exc:
             await self.record("error", {"where": "tts", "detail": str(exc)})
             return
 
+        if keep:
+            tts.remember_audio(text, language, b"".join(keep))
         await self.record("tts", {
             "text": text, "bytes": total, "first_byte_ms": first_byte_ms,
             "elapsed_ms": int((time.perf_counter() - started) * 1000),

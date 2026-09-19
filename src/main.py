@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,6 +20,7 @@ from src.obs.guard import ConsoleGuard
 from src.obs.store import store
 from src.platform_api.client import PlatformClient
 from src.telephony import twilio_ws
+from src.voice import tts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -70,10 +72,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if missing:
         logger.warning("voice pipeline incomplete, missing: %s", ", ".join(missing))
 
+    warming = asyncio.create_task(_warm_voice_cache(), name="tts-cache")
     try:
         yield
     finally:
+        warming.cancel()
         await llm.aclose()
+
+
+async def _warm_voice_cache() -> None:
+    """In the background: a call before it finishes just synthesises live."""
+    if not settings.tts_warm_cache:
+        return
+    try:
+        warmed = await tts.warm_cache()
+        logger.info("tts cache warmed: %s fixed lines", warmed)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("tts cache not warmed: %s", exc)
 
 
 app = FastAPI(title="El Turno · Clínica Arenal", version="1.0.0", lifespan=lifespan)

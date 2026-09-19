@@ -138,6 +138,8 @@ class Settings:
     default_language: str = field(default_factory=lambda: _env("DEFAULT_LANGUAGE", default="en").lower())
     silence_prompt_s: float = field(default_factory=lambda: _float("SILENCE_PROMPT_S", 7.0))
     silence_prompt_max: int = field(default_factory=lambda: _int("SILENCE_PROMPT_MAX", 2))
+    # Synthesise the greeting and fixed lines at start-up (~300 characters).
+    tts_warm_cache: bool = field(default_factory=lambda: _bool("TTS_WARM_CACHE", True))
 
     # Observability
     db_path: str = field(default_factory=lambda: _env("DB_PATH", default=str(DATA_DIR / "calls.db")))
