@@ -408,6 +408,7 @@ class ToolBox:
             national_id=args.get("national_id"),
             phone=args.get("phone"),
             date_of_birth=args.get("date_of_birth"),
+            prior_matches=self.session.seen_patients,
         )
         await self.session.remember_matches(result["matches"])
         if result.get("needs_more"):
@@ -822,6 +823,7 @@ class ToolBox:
             },
             "reference_number": None,
             "guidance": "Read the appointment back once and ask if they need anything else. "
+                        "Mention a confirmation email only if we already have their address. "
                         "The platform did not provide a reference number, so never invent one.",
         }
 
@@ -857,7 +859,8 @@ class ToolBox:
             "status": result.status,
             "confirmed": {"when": slot.start.strftime("%A %d %B, %H:%M"),
                           "doctor": slot.provider_name},
-            "guidance": "Read the new time back to the caller.",
+            "guidance": "Read the new time back to the caller. Mention a confirmation email "
+                        "only if we already have their address.",
         }
 
     async def _tool_cancel_appointment(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -887,7 +890,8 @@ class ToolBox:
             "status": result.status,
             "appointment_id": appointment_id,
             "still_on_the_chart": leftover,
-            "guidance": "Confirm this cancellation. If they asked to cancel another one as well, "
+            "guidance": "Confirm this cancellation. Mention a confirmation email only if we "
+                        "already have their address. If they asked to cancel another one as well, "
                         "call this tool again for that row. Do not cancel leftover appointments "
                         "unless they asked.",
         }
@@ -906,7 +910,8 @@ class ToolBox:
                                 "hold the call to hear it. If the id and phone arrived as one "
                                 "number, pass them as heard."}
 
-        if not args.get("confirmed") or fields != self.pending_registration:
+        short_on_time = self.session.remaining_s() < 25
+        if (not args.get("confirmed") or fields != self.pending_registration) and not short_on_time:
             # A corrected detail changes the fields, which lands back here: what
             # is registered is always exactly what the caller last heard.
             self.pending_registration = fields
@@ -920,14 +925,15 @@ class ToolBox:
                 "needs_confirmation": True,
                 "read_back": _read_back(fields, self.session.language),
                 "letter_inferred": letter_inferred,
-                "guidance": "Nothing is on file yet. Read these back in one turn: spell the given "
-                            "name and both surnames, give the id digit by digit with its letter"
-                            + (" (the caller did not say the letter; it was worked out from the "
-                               "digits, so ask them to confirm it)" if letter_inferred else "")
-                            + ", and spell the email. Ask whether it is all correct. If yes, call "
-                              "register_new_patient again with the same details and confirmed=true; "
-                              "if they correct anything, call it again with the corrected details "
-                              "and no confirmed.",
+                "guidance": "Nothing is on file yet. Confirm in one short sentence, not a list: "
+                            "full name as normal words, date of birth, id and phone as in "
+                            "read_back, email as spelled there, insurer. Then ask if that is "
+                            "correct. Do not start a second turn after the question."
+                            + (" The DNI letter was worked out from the digits; mention it once."
+                               if letter_inferred else "")
+                            + " If yes, call register_new_patient again with the same details and "
+                              "confirmed=true; if they correct anything, call it again with the "
+                              "corrected details and no confirmed.",
             }
 
         payload = {"call_id": self.session.call_id, **fields}
@@ -938,8 +944,9 @@ class ToolBox:
             "status": result.status,
             "on_file": {"name": f"{fields['given_name']} {fields['first_surname']} {fields['second_surname']}",
                         "national_id": fields["national_id"]},
-            "guidance": "Confirm they are on file, ask if they need anything else, and only then "
-                        "say goodbye. Nothing is booked on this call; do not offer a slot.",
+            "guidance": "Confirm they are on file, mention the confirmation email, ask if they "
+                        "need anything else, and only then say goodbye. Do not ask if the details "
+                        "are correct. Nothing is booked on this call; do not offer a slot.",
         }
 
     async def _tool_end_without_booking(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -1169,14 +1176,22 @@ def _spell_email(email: str, language: str = "en") -> str:
     return f"{spelled} {words['@']} {domain.replace('.', ' ' + words['.'] + ' ')}"
 
 
+def _compact_email(email: str, language: str = "en") -> str:
+    """Say the address, not every letter. Digit-by-digit email burns the call."""
+    words = _EMAIL_WORDS.get((language or "")[:2], _EMAIL_WORDS["en"])
+    local, _, domain = email.partition("@")
+    dotted = domain.replace(".", f" {words['.']} ")
+    return f"{local} {words['@']} {dotted}"
+
+
 def _read_back(fields: dict[str, Any], language: str = "en") -> dict[str, str]:
     return {
-        "given_name": _spell(fields["given_name"]),
-        "first_surname": _spell(fields["first_surname"]),
-        "second_surname": _spell(fields["second_surname"]),
-        "national_id": " ".join(fields["national_id"]),
+        "given_name": fields["given_name"],
+        "first_surname": fields["first_surname"],
+        "second_surname": fields["second_surname"],
+        "national_id": fields["national_id"],
         "date_of_birth": fields["date_of_birth"],
-        "phone": " ".join(fields["phone"]),
-        "email": _spell_email(fields["email"], language),
+        "phone": fields["phone"],
+        "email": _compact_email(fields["email"], language),
         "insurer": fields["insurer"],
     }

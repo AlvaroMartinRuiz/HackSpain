@@ -66,6 +66,7 @@ class LiveCall:
     clinic_calls: list[dict[str, Any]] = field(default_factory=list)
     decisions: list[dict[str, Any]] = field(default_factory=list)
     submissions: list[dict[str, Any]] = field(default_factory=list)
+    followup_emails: list[dict[str, Any]] = field(default_factory=list)
     patient: Optional[dict[str, Any]] = None
     intent: Optional[str] = None
     errors: list[dict[str, Any]] = field(default_factory=list)
@@ -136,6 +137,7 @@ class LiveCall:
             "clinic_calls": self.clinic_calls,
             "decisions": self.decisions,
             "submissions": self.submissions,
+            "followup_emails": self.followup_emails,
             "patient_full": self.patient,
             "errors": self.errors,
             "events": list(self.events),
@@ -365,6 +367,8 @@ class CallStore:
                 call.stage = payload["stage"]
         elif kind == "submit":
             call.submissions.append({**payload, "ts": _now_iso()})
+        elif kind == "followup_email":
+            call.followup_emails.append({**payload, "ts": _now_iso()})
         elif kind == "patient_identified":
             call.patient = payload.get("patient")
         elif kind == "intent":

@@ -18,6 +18,7 @@ data/calls.db-*
 data/ops-smoke.db
 data/ops-smoke.db-*
 data/recordings/
+data/emails/
 
 # Server output when it is started detached.
 server.out

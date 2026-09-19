@@ -177,6 +177,19 @@ class Settings:
     default_language: str = field(default_factory=lambda: _env("DEFAULT_LANGUAGE", default="en").lower())
     silence_prompt_s: float = field(default_factory=lambda: _float("SILENCE_PROMPT_S", 16.0))
     silence_prompt_max: int = field(default_factory=lambda: _int("SILENCE_PROMPT_MAX", 2))
+    # Post-call summary / appointment confirmation. Never on the scored path.
+    followup_email: bool = field(default_factory=lambda: _bool("FOLLOWUP_EMAIL", True))
+    followup_from: str = field(
+        default_factory=lambda: _env(
+            "FOLLOWUP_FROM", default="Clínica Arenal <onboarding@resend.dev>"
+        )
+    )
+    followup_copy: str = field(default_factory=lambda: _env("FOLLOWUP_COPY"))
+    resend_api_key: str = field(default_factory=lambda: _env("RESEND_API_KEY"))
+    smtp_host: str = field(default_factory=lambda: _env("SMTP_HOST", default="smtp.gmail.com"))
+    smtp_port: int = field(default_factory=lambda: _int("SMTP_PORT", 587))
+    smtp_user: str = field(default_factory=lambda: _env("SMTP_USER"))
+    smtp_password: str = field(default_factory=lambda: _env("SMTP_PASSWORD", "GMAIL_APP_PASSWORD"))
     # Synthesise the greeting and fixed lines at start-up (~300 characters).
     tts_warm_cache: bool = field(default_factory=lambda: _bool("TTS_WARM_CACHE", True))
 

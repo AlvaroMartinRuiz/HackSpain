@@ -141,6 +141,8 @@ async def health() -> dict[str, Any]:
         "missing_keys": settings.missing_voice_keys(),
         "live_calls": len(store.live_calls()),
         "smart_turn": turns.status(),
+        "followup_email": settings.followup_email,
+        "followup_can_send": bool(settings.resend_api_key),
     }
 
 

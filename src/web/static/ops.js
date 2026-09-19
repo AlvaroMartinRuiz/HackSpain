@@ -620,11 +620,15 @@ function renderTabs() {
     : '<div class="entry"><div class="trace">No tools yet.</div></div>';
 
   const submissions = detail.submissions || [];
+  const emails = detail.followup_emails || [];
   const clinic = (detail.clinic_calls || []).slice(-12);
   el("tab-record").innerHTML =
     (submissions.length
       ? submissions.map(submissionRow).join("")
       : '<div class="entry"><div class="trace">Nothing submitted yet.</div></div>')
+    + (emails.length
+      ? `<div class="group-label">Follow-up email</div>${emails.map(followupRow).join("")}`
+      : "")
     + (clinic.length
       ? `<div class="group-label">Clinic lookups</div>${clinic.map(clinicRow).join("")}`
       : "");
@@ -668,6 +672,20 @@ function submissionRow(submission) {
   </div>`;
 }
 
+function followupRow(email) {
+  const sent = email.sent;
+  const to = (email.to || []).join(", ") || "preview only";
+  const status = sent ? "sent" : (email.reason || "saved");
+  return `<div class="entry">
+    <div class="head">
+      <b class="${sent ? "stage" : "reason"}">${escapeHtml(email.action || "follow-up")}</b>
+      <span class="ms">${escapeHtml(status)}</span>
+    </div>
+    <div class="trace">${escapeHtml(email.subject || "")} · ${escapeHtml(to)}</div>
+    ${email.text ? `<pre>${escapeHtml(email.text)}</pre>` : ""}
+  </div>`;
+}
+
 function clinicRow(call) {
   return `<div class="entry">
     <div class="head"><b>${escapeHtml(call.path)}</b><span class="ms">${call.elapsed_ms ?? "?"} ms</span></div>
@@ -691,6 +709,7 @@ function _hydrateDetail(detail) {
   const clinic_calls = [];
   const decisions = [];
   const submissions = [];
+  const followup_emails = [];
   for (const event of events) {
     const payload = event.payload || {};
     if (event.kind === "stt_final" && payload.text) {
@@ -711,6 +730,8 @@ function _hydrateDetail(detail) {
       decisions.push({ ...payload, ts: event.ts });
     } else if (event.kind === "submit") {
       submissions.push({ ...payload, ts: event.ts });
+    } else if (event.kind === "followup_email") {
+      followup_emails.push({ ...payload, ts: event.ts });
     } else if (event.kind === "patient_identified") {
       detail.patient_full = payload.patient;
     }
@@ -720,6 +741,7 @@ function _hydrateDetail(detail) {
   if (!Array.isArray(detail.clinic_calls)) detail.clinic_calls = clinic_calls;
   if (!Array.isArray(detail.decisions)) detail.decisions = decisions;
   if (!Array.isArray(detail.submissions)) detail.submissions = submissions;
+  if (!Array.isArray(detail.followup_emails)) detail.followup_emails = followup_emails;
   return detail;
 }
 
@@ -729,7 +751,8 @@ function _mergeLiveSummary(detail, summary) {
   // then throw when the tabs tried to .map a number.
   for (const [key, value] of Object.entries(summary || {})) {
     if (key === "tool_calls" || key === "clinic_calls" || key === "errors"
-        || key === "transcript" || key === "decisions" || key === "submissions") {
+        || key === "transcript" || key === "decisions" || key === "submissions"
+        || key === "followup_emails") {
       continue;
     }
     detail[key] = value;
@@ -780,6 +803,9 @@ function applyEvent(message) {
       break;
     case "submit":
       (detail.submissions = detail.submissions || []).push(payload);
+      break;
+    case "followup_email":
+      (detail.followup_emails = detail.followup_emails || []).push(payload);
       break;
     case "patient_identified":
       detail.patient_full = payload.patient;

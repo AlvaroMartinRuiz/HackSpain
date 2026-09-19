@@ -153,6 +153,7 @@ def _detail_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
     tool_calls: list[dict[str, Any]] = []
     clinic_calls: list[dict[str, Any]] = []
     submissions: list[dict[str, Any]] = []
+    followup_emails: list[dict[str, Any]] = []
     patient_full: Optional[dict[str, Any]] = None
     for event in events:
         kind = event.get("kind")
@@ -175,6 +176,8 @@ def _detail_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
             clinic_calls.append(payload)
         elif kind == "submit":
             submissions.append(payload)
+        elif kind == "followup_email":
+            followup_emails.append(payload)
         elif kind == "patient_identified":
             patient_full = payload.get("patient")
     actions = [
@@ -187,6 +190,7 @@ def _detail_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
         "tool_calls": tool_calls,
         "clinic_calls": clinic_calls,
         "submissions": submissions,
+        "followup_emails": followup_emails,
         "actions": actions,
         "patient_full": patient_full,
         "turns": sum(1 for t in transcript if t.get("role") == "agent"),

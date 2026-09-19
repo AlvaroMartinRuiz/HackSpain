@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import re
 import time
 from typing import Any, Awaitable, Callable, Optional
@@ -27,9 +28,13 @@ from src.voice.language import decide_language, should_apply_language
 from src.voice.stt import build_transcriber, keyterms_for
 from src.voice.tts import Synthesizer, build_synthesizer
 from src.voice.turns import TurnGate
+from src.notify import email as followup_email
 
 Sender = Callable[[dict[str, Any]], Awaitable[None]]
 Closer = Callable[[], Awaitable[None]]
+log = logging.getLogger("socketwizard")
+_FOLLOWUP_ACTIONS = {"book", "reschedule", "cancel", "register"}
+_FOLLOWUP_TASKS: set[asyncio.Task] = set()
 
 # Deepgram's Nova-3 barge-in guidance: two words on an interim result. We stop
 # ourselves when they talk; we never start a turn until Pipecat Smart Turn
@@ -48,6 +53,8 @@ RECOVERY_BUDGET_S = 6.0
 # seconds between our own limit and the harness cutting the call at three
 # minutes.
 DEADLINE_SETTLE_S = 5.0
+# Speak a goodbye this long before the hard cut, so the line never dies mid-question.
+SOFT_CLOSE_LEAD_S = 18.0
 # After the Spanish greeting, give a slow English caller time to start before
 # we re-ask. Once they have spoken, wait a little longer between prompts.
 SILENCE_OPENING_RETRY_S = 18.0
@@ -128,6 +135,7 @@ class CallSession:
         self._closed = False
         self._sealing = False
         self._frozen = False
+        self._winding_down = False
         self.language = settings.default_language
         # Not in _tasks: it is cancelled and re-created on every turn.
         self._silence_task: Optional[asyncio.Task] = None
@@ -368,21 +376,71 @@ class CallSession:
         })
         await self.submit("no_action", {"call_id": self.call_id, "reason": reason})
 
+    def remaining_s(self) -> float:
+        return max(0.0, settings.call_hard_limit_s - (time.monotonic() - self._started_at))
+
     async def _deadline_loop(self) -> None:
-        """Finish with enough room for draining and a worst-case submit retry."""
+        """Say goodbye before the hard cut. Never drop the line mid-question."""
         try:
-            await asyncio.sleep(settings.call_hard_limit_s)
+            await asyncio.sleep(max(0.0, settings.call_hard_limit_s - SOFT_CLOSE_LEAD_S))
         except asyncio.CancelledError:
             raise
-        await self.record("error", {"where": "deadline", "detail": "hard call limit reached"})
-        # A turn already running may still produce the real action, so give it
-        # a moment rather than racing it to a timed-out NO_ACTION.
+        await self._close_politely()
+
+    async def _close_politely(self) -> None:
+        """Hang up without talking over a goodbye the agent already said."""
+        if self._closing or self._winding_down:
+            return
+        self._winding_down = True
+        leftover = self.agent.tools.completable_registration()
+        already = any(result.accepted or result.duplicate for result in self.submissions)
+        if leftover and not already:
+            await self.record("decision", {
+                "stage": "time_up",
+                "why": "registration was complete; closing it instead of asking again",
+            })
+            await self.submit("register", {"call_id": self.call_id, **leftover})
+            already = any(result.accepted or result.duplicate for result in self.submissions)
+            await self._cut_speech()
+            line = phrases.pick(phrases.TIME_UP_DONE, self.language)
+            self.agent.note_agent_line(line)
+            await self.say(line)
+        elif already:
+            await self.record("decision", {
+                "stage": "time_up",
+                "why": "record already closed; hanging up after the spoken goodbye",
+            })
+        else:
+            await self.record("error", {"where": "deadline", "detail": "hard call limit reached"})
+            await self._cut_speech()
+            line = phrases.pick(phrases.TIME_UP, self.language)
+            self.agent.note_agent_line(line)
+            await self.say(line)
         try:
-            await asyncio.wait_for(self._settled(), timeout=DEADLINE_SETTLE_S)
+            await asyncio.wait_for(self._wait_until_quiet(), timeout=12.0)
         except (asyncio.TimeoutError, Exception):
             pass
         await self.finalize("timed_out")
         await self._close_connection()
+
+    async def _cut_speech(self) -> None:
+        """Stop the current utterance so the goodbye can start."""
+        self._generation += 1
+        _drain(self._say_queue)
+        _drain(self._audio_queue)
+        self._speaking_since = None
+        self._current_text = ""
+        self._current_sent = 0
+        self._current_total = 0
+        if self.stream_sid:
+            try:
+                await self._send({"event": "clear", "streamSid": self.stream_sid})
+            except Exception:
+                pass
+
+    async def _wait_until_quiet(self) -> None:
+        while self.is_speaking:
+            await asyncio.sleep(0.05)
 
     async def _close_connection(self) -> None:
         if self._close_wire is None:
@@ -535,7 +593,8 @@ class CallSession:
 
     def _arm_silence(self) -> None:
         """Start listening for silence, if the agent has nothing more to say."""
-        if (self.text_mode or self._closing or self._sealing or self.is_speaking
+        if (self.text_mode or self._closing or self._winding_down or self._sealing
+                or self.is_speaking
                 or self._turn_lock.locked()
                 or self._turn_parts
                 or self._call_is_done()
@@ -875,7 +934,7 @@ class CallSession:
         self._turn_ready = False
         if self._turn_gate is not None:
             self._turn_gate.reset()
-        if not text or self._closed:
+        if not text or self._closed or self._winding_down:
             return
         self._last_committed = text
         await self.record("turn_committed", {"text": text})
@@ -890,6 +949,8 @@ class CallSession:
             task.add_done_callback(self._agent_tasks.discard)
 
     async def _run_caller_turn(self, text: str) -> None:
+        if self._winding_down or self._closing or self._closed:
+            return
 
         if self._turn_lock.locked():
             # The caller added something while we were still working: keep the
@@ -939,7 +1000,7 @@ class CallSession:
 
     async def submit(self, action: str, payload: dict[str, Any]) -> SubmitResult:
         """Send one action, and never send the same one twice."""
-        if self._frozen or (self._sealing and action != "no_action"):
+        if self._frozen or (self._sealing and action not in {"no_action", "register"}):
             result = SubmitResult(action, payload, 0, {"skipped": "record already closed"}, 0)
             await self.record("submit_skipped", result.as_dict())
             return result
@@ -958,7 +1019,102 @@ class CallSession:
         else:
             result = await self.client.submit(action, payload)
         self.submissions.append(result)
+        if (
+            settings.followup_email
+            and (result.accepted or result.duplicate)
+            and action in _FOLLOWUP_ACTIONS
+        ):
+            await self._queue_followup(action, payload)
         return result
+
+    async def _queue_followup(self, action: str, payload: dict[str, Any]) -> None:
+        """Compose and log a confirmation. Sending never blocks the record."""
+        try:
+            event = self._compose_followup(action, payload)
+            await self.record("followup_email", {k: v for k, v in event.items() if k != "html"})
+        except Exception as exc:
+            log.warning("followup compose failed: %s", exc)
+            return
+        task = asyncio.create_task(self._deliver_followup(event), name=f"followup:{self.call_id}")
+        _FOLLOWUP_TASKS.add(task)
+        task.add_done_callback(_FOLLOWUP_TASKS.discard)
+
+    def _compose_followup(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        patient = self.agent.tools.patient or {}
+        name, to, details = self._followup_details(action, payload, patient)
+        message = followup_email.compose(
+            action, language=self.language, patient_name=name, details=details,
+        )
+        path = followup_email.save_copy(self.call_id, action, message)
+        recipients = [addr for addr in (to, settings.followup_copy) if addr and "@" in addr]
+        return {
+            "action": action,
+            "subject": message["subject"],
+            "text": message["text"],
+            "html": message["html"],
+            "to": recipients,
+            "patient_name": name,
+            "sent": False,
+            "reason": "queued",
+            "path": str(path),
+        }
+
+    def _followup_details(
+        self, action: str, payload: dict[str, Any], patient: dict[str, Any],
+    ) -> tuple[str, Optional[str], dict[str, Any]]:
+        if action == "register":
+            name = " ".join(
+                str(payload.get(key) or "")
+                for key in ("given_name", "first_surname", "second_surname")
+            ).strip()
+            return name, payload.get("email"), {
+                "name": name,
+                "national_id": payload.get("national_id"),
+                "date_of_birth": payload.get("date_of_birth"),
+                "phone": payload.get("phone"),
+                "email": payload.get("email"),
+                "insurer": payload.get("insurer"),
+            }
+
+        name = str(patient.get("full_name") or "").strip()
+        to = patient.get("email") or payload.get("email")
+        provider_id = payload.get("provider_id")
+        location_id = payload.get("location_id")
+        slot = payload.get("slot")
+        if action == "cancel":
+            for row in self.agent.tools.patient_context.get("upcoming") or []:
+                if row.get("appointment_id") == payload.get("appointment_id"):
+                    provider_id = row.get("provider_id") or provider_id
+                    location_id = row.get("location_id") or location_id
+                    slot = row.get("slot") or slot
+                    details = {
+                        "when": followup_email.format_when(slot, self.language) or row.get("when"),
+                        "doctor": row.get("provider_name"),
+                        "site": row.get("location_name"),
+                    }
+                    return name, to, details
+        provider = self.catalog.providers.get(provider_id or "")
+        location = self.catalog.locations.get(location_id or "")
+        site = ""
+        if location is not None:
+            site = location.name if not location.address else f"{location.name}, {location.address}"
+        return name, to, {
+            "when": followup_email.format_when(slot, self.language),
+            "doctor": provider.name if provider else provider_id,
+            "site": site or location_id,
+        }
+
+    async def _deliver_followup(self, event: dict[str, Any]) -> None:
+        result = await followup_email.deliver(event.get("to") or [], {
+            "subject": event["subject"],
+            "text": event["text"],
+            "html": event["html"],
+        })
+        update = {k: v for k, v in {**event, **result}.items() if k != "html"}
+        try:
+            await self.record("followup_email", update)
+        except Exception as exc:
+            log.warning("followup record failed: %s", exc)
 
 
 # "[nombre del paciente]", "[full name]": a template slot, never a real word.

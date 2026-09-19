@@ -37,6 +37,19 @@ HOLD: dict[str, str] = {
     "ca": "Un moment, si us plau.",
 }
 
+# Spoken before the hard limit hangs up. Never cut the line on a question.
+TIME_UP: dict[str, str] = {
+    "en": "I have to leave you here. Thank you for calling. Goodbye.",
+    "es": "Tengo que dejarle aquí. Gracias por llamar. Adiós.",
+    "ca": "He de deixar-lo aquí. Gràcies per trucar. Adéu.",
+}
+
+TIME_UP_DONE: dict[str, str] = {
+    "en": "You're on file. I'll send a confirmation email. Goodbye.",
+    "es": "Ya consta en la clínica. Le envío un correo de confirmación. Adiós.",
+    "ca": "Ja consta a la clínica. Li envio un correu de confirmació. Adéu.",
+}
+
 
 def pick(table: dict[str, str], language: str) -> str:
     return table.get((language or "")[:2]) or table["en"]
@@ -55,6 +68,8 @@ def fixed_lines(language: str) -> list[str]:
         RETRY.get(code, ""),
         MODEL_DOWN.get(code, ""),
         HOLD.get(code, ""),
+        TIME_UP.get(code, ""),
+        TIME_UP_DONE.get(code, ""),
     ] + [
         line for line, lang in OPENING_RETRY if lang == code
     ]

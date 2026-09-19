@@ -63,6 +63,9 @@ def normalize_phone(raw: str) -> str:
         digits = digits[4:]
     elif digits.startswith("34") and len(digits) > 9:
         digits = digits[2:]
+    # A tenth leading 6 is usually STT repeating the mobile prefix.
+    if len(digits) == 10 and digits.startswith("66"):
+        return digits[:9]
     return digits[-9:] if len(digits) >= 9 else digits
 
 

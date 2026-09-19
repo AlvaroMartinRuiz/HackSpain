@@ -145,6 +145,7 @@ class SchedulingEngine:
         national_id: Optional[str] = None,
         phone: Optional[str] = None,
         date_of_birth: Optional[str] = None,
+        prior_matches: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         """Look a caller up, and say plainly what the directory answered.
 
@@ -190,6 +191,18 @@ class SchedulingEngine:
                 if exc.status == 422:
                     trace.append(_needs_more(exc.detail))
                     return []
+                if exc.status == 0 and prior_matches:
+                    recovered = _filter_prior(
+                        prior_matches,
+                        name=name,
+                        national_id=national_id_clean,
+                        date_of_birth=date_of_birth,
+                    )
+                    trace.append(
+                        "directory timed out; used earlier matches from this call"
+                        + (f" ({len(recovered)})" if recovered else "")
+                    )
+                    return recovered
                 raise
 
         matches = await search(
@@ -755,6 +768,25 @@ def _needs_more(detail: Any) -> str:
     if isinstance(detail, dict) and detail.get("detail"):
         return f"directory needs more: {detail['detail']}"
     return "directory needs a given name plus a surname, or an exact id, phone or date of birth"
+
+
+def _filter_prior(
+    prior: list[dict[str, Any]],
+    name: Optional[str] = None,
+    national_id: Optional[str] = None,
+    date_of_birth: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Narrow people we already saw on this call when the directory hangs."""
+    hits = [dict(item) for item in prior]
+    if date_of_birth:
+        exact = [item for item in hits if str(item.get("date_of_birth") or "") == date_of_birth]
+        if exact:
+            hits = exact
+    if national_id:
+        by_id = [item for item in hits if str(item.get("national_id") or "") == national_id]
+        if by_id:
+            hits = by_id
+    return hits
 
 
 def _distinguishers(matches: list[dict[str, Any]]) -> list[str]:
