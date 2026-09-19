@@ -77,6 +77,9 @@ class Settings:
     # Reload restarts the server whenever a file is saved, which during a Run All
     # drops every live socket at once. Off unless asked for.
     reload: bool = field(default_factory=lambda: _bool("RELOAD", False))
+    # The console behind ngrok needs this; empty means reachable from this
+    # machine only.
+    console_token: str = field(default_factory=lambda: _env("CONSOLE_TOKEN"))
 
     # Speech to text
     stt_provider: str = field(default_factory=lambda: _env("STT_PROVIDER", default="deepgram").lower())

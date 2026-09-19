@@ -15,6 +15,7 @@ from src.agent.llm import LLMClient
 from src.config import settings
 from src.domain.catalog import Catalog
 from src.obs import api as console_api
+from src.obs.guard import ConsoleGuard
 from src.obs.store import store
 from src.platform_api.client import PlatformClient
 from src.telephony import twilio_ws
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="El Turno · Clínica Arenal", version="1.0.0", lifespan=lifespan)
+app.add_middleware(ConsoleGuard)
 app.include_router(twilio_ws.router)
 app.include_router(console_api.router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
