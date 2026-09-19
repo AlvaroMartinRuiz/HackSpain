@@ -68,7 +68,10 @@ class Settings:
 
     # Server
     port: int = field(default_factory=lambda: _int("PORT", 7860))
-    host: str = field(default_factory=lambda: _env("HOST", default="0.0.0.0"))
+    # Loopback, because ngrok dials from this machine and nothing else needs to.
+    # On a venue network 0.0.0.0 hands the console — names, DNIs and transcripts
+    # — to everyone on the wifi. Set it explicitly if the tunnel ever moves.
+    host: str = field(default_factory=lambda: _env("HOST", default="127.0.0.1"))
     public_ws_url: str = field(default_factory=lambda: _env("PUBLIC_WS_URL"))
     public_console_url: str = field(default_factory=lambda: _env("PUBLIC_CONSOLE_URL"))
     # Reload restarts the server whenever a file is saved, which during a Run All

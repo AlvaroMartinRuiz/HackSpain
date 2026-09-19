@@ -309,6 +309,11 @@ class ToolBox:
         self.options_for: Optional[str] = None
         self.named_insurers: list[str] = []
         self.last_reason: Optional[str] = None
+        # Provider ids a tool has actually handed over on this call. The briefing
+        # lists every doctor by name, which is enough for the model to resolve a
+        # spoken surname itself and skip the ambiguity find_doctor exists to
+        # surface.
+        self.resolved_providers: set[str] = set()
 
     def schemas(self) -> list[dict[str, Any]]:
         return SCHEMAS
@@ -378,6 +383,11 @@ class ToolBox:
 
         self.patient = found
         self.patient_context = context
+        # The doctors on their own chart are a tool's answer too, so "my usual
+        # doctor" does not have to go back through find_doctor.
+        for appointment in (context.get("upcoming") or []) + (context.get("past") or []):
+            if appointment.get("provider_id"):
+                self.resolved_providers.add(appointment["provider_id"])
         await self.session.on_patient_identified(found, context)
         return {
             "patient": {k: v for k, v in found.items() if k != "national_id"},
@@ -397,6 +407,8 @@ class ToolBox:
 
     async def _tool_find_doctor(self, args: dict[str, Any]) -> dict[str, Any]:
         result = self.engine.resolve_provider(str(args.get("name", "")))
+        for provider in result.get("providers", []):
+            self.resolved_providers.add(provider["provider_id"])
         if result["count"] == 0:
             self.last_reason = "provider_not_found"
             return {"found": 0, "guidance": "No doctor by that name. Offer the specialty instead."}
@@ -466,6 +478,15 @@ class ToolBox:
         if wrong is not None:
             return wrong
 
+        provider_id = args.get("provider_id")
+        if provider_id and provider_id not in self.resolved_providers:
+            return {
+                "error": f"{provider_id} did not come from a tool on this call",
+                "guidance": "Call find_doctor with the name the caller actually said. Two pairs "
+                            "of surnames here are indistinguishable over a phone, so it returns "
+                            "both and which one they mean is a question for the caller.",
+            }
+
         # A plan id is lowercase and underscored ("nueva_mutua") but the caller
         # says "Nueva Mutua". An unrecognised name used to be dropped in silence,
         # which the model reads as a second policy that did not help.
@@ -494,7 +515,7 @@ class ToolBox:
         search = await self.engine.find_slots(
             patient_id=self.patient.get("patient_id"),
             specialty_id=specialty_id,
-            provider_id=args.get("provider_id"),
+            provider_id=provider_id,
             location_id=args.get("location_id"),
             when=args.get("when"),
             part_of_day=args.get("part_of_day"),

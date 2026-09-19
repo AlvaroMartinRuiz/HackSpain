@@ -159,10 +159,15 @@ async def rehearse(request: RehearsalRequest) -> dict[str, Any]:
 
     await session.record("call_started", {"rehearsal": True, "label": request.label,
                                           "from_number": request.from_number})
-    await session.start()
-    for turn in request.turns:
-        await session.feed_text(turn)
-    await session.finalize(status="rehearsed")
+    try:
+        await session.start()
+        for turn in request.turns:
+            await session.feed_text(turn)
+    finally:
+        # A rehearsal that throws half way through would otherwise sit in the
+        # console as live for ever, and the concurrency figures read off it —
+        # the ones the jury is shown — would be wrong from then on.
+        await session.finalize(status="rehearsed")
 
     call = store.get(call_id)
     detail = call.detail() if call else {}

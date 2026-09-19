@@ -93,22 +93,48 @@ antes de entregarlo:
 .\.venv\Scripts\python scripts\mock_call.py --url wss://tu-nombre.ngrok-free.app/ws
 ```
 
+## Voz: Aura para practicar, ElevenLabs para puntuar
+
+El default en `.env` es ElevenLabs. Para ensayos y llamadas de práctica
+cambiadlo a Aura (`TTS_PROVIDER=deepgram`): misma clave que el transcriptor,
+µ-law 8 kHz, y no gasta los caracteres del plan Creator.
+
+ElevenLabs es el plan Creator: **131.000 caracteres, unos dos Run All**. Cuando
+se acaba, la voz se cae y cada llamada muda es un caso nuestro. No la uséis
+para practicar. Para un Run All o para la demo del jurado:
+
+```
+TTS_PROVIDER=elevenlabs
+```
+
+Si Aura no está y hay que practicar audio de todos modos: `TTS_PROVIDER=openai`.
+
+La lógica se itera en texto, sin cuota de voz:
+
+```powershell
+.\.venv\Scripts\python scripts\rehearse.py
+```
+
+Llamadas de práctica **solo** para lo que depende del audio: ruido (p12),
+interrupciones (p13), idiomas (p11). Y con Aura u OpenAI, no ElevenLabs.
+
 ## Antes de cada Run All
 
 ```powershell
 # El cable aguanta la ráfaga más grande del set (problema 2)
-.\.venv\Scripts\python scripts\mock_call.py --calls 20 --seconds 6
+.\.venv\Scripts\python scripts\mock_call.py --calls 10 --seconds 6
 
 # La lógica sigue dando el registro correcto
 .\.venv\Scripts\python scripts\rehearse.py
 ```
 
-Si `mock_call` reporta alguna llamada sin audio, para y arréglalo: una llamada
-muda es un caso fallado haga lo que haga el resto.
+Pon `TTS_PROVIDER=elevenlabs` antes de puntuar. Si `mock_call` reporta alguna
+llamada sin audio, o la consola muestra errores `tts`, para y arréglalo: una
+llamada muda es un caso fallado haga lo que haga el resto.
 
 Un Run All tarda unos dieciocho minutos y hay quince de espera después, así que
-sale uno cada treinta y tres. Ensaya en texto entre medias, no con llamadas de
-práctica.
+sale uno cada treinta y tres. Ensaya en texto entre medias. Vigilad los
+caracteres de ElevenLabs entre un run y el siguiente.
 
 ## Cuando algo va mal
 
