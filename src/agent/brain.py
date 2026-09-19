@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+import unicodedata
 from typing import TYPE_CHECKING, Any, Optional
 
 from src.agent.llm import Completion, LLMClient, LLMError
@@ -19,7 +20,13 @@ ABBREVIATION_END = re.compile(r"\b(?:dr|dra|sr|sra|mr|mrs|ms)\.$", re.IGNORECASE
 SOFT_BREAK = re.compile(r"(?<=[,;:])\s+")
 MAX_HISTORY_MESSAGES = 26
 SOFT_FLUSH_CHARS = 130
-MIN_SPEECH_CHUNK_CHARS = 64
+# Hold only a filler opener ("Thank you.") so it rides with the next sentence.
+# A real short line ("¿Hablo con Ella Smith?") must not wait for the LLM to finish.
+_FILLER_OPENER = re.compile(
+    r"^(thank you|thanks|i understand|great|ok|okay|"
+    r"de acuerdo|vale|perfecto|entendido|d['']acord|moltes gracies)\.?$",
+    re.IGNORECASE,
+)
 
 
 class Agent:
@@ -113,9 +120,8 @@ class Agent:
                 self._buffer += value
                 for sentence in self._drain():
                     speech_parts.append(sentence)
-                    chunk = " ".join(speech_parts)
-                    if len(chunk) >= MIN_SPEECH_CHUNK_CHARS or len(speech_parts) >= 2:
-                        await self.session.say(chunk)
+                    if _ready_to_speak(speech_parts):
+                        await self.session.say(" ".join(speech_parts))
                         speech_parts.clear()
             else:
                 completion = value
@@ -293,21 +299,48 @@ def _clip(value: Any, limit: int = 1200) -> Any:
     return {"truncated": True, "preview": text[:limit]}
 
 
+def _fold_speech(text: str) -> str:
+    folded = unicodedata.normalize("NFKD", (text or "").lower())
+    stripped = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    return " ".join(re.sub(r"[^a-z ]+", " ", stripped).split())
+
+
+def _ready_to_speak(parts: list[str]) -> bool:
+    """Speak as soon as we have a real utterance; keep filler for the next clause."""
+    if not parts:
+        return False
+    if len(parts) >= 2:
+        return True
+    last = parts[-1].strip()
+    if last.endswith("?"):
+        return True
+    if _FILLER_OPENER.match(last):
+        return False
+    return True
+
+
 def _liveness_response(text: str, language: str) -> Optional[str]:
-    """Answer line checks immediately instead of spending an LLM round trip."""
-    clean = re.sub(r"[^a-zà-ÿ ]+", " ", (text or "").lower())
-    clean = " ".join(clean.split())
-    checks = {
-        "hello", "hi", "hello are you still there", "are you there",
-        "are you still there", "can you hear me",
-        "hola", "hola está ahí", "esta ahi", "me oye", "me escucha",
-        "em sent", "em sents", "hola em sents",
+    """Answer line checks immediately instead of spending an LLM round trip.
+
+    Isolated greetings ("Hello?", "Hola") are the start of a call, not a check.
+    The reply follows the phrase, not the session language: "Hello?" after a
+    Spanish greeting is still English.
+    """
+    clean = _fold_speech(text)
+    english = {
+        "hello are you still there", "are you there", "are you still there",
+        "can you hear me",
     }
-    if clean not in checks:
-        return None
-    code = (language or "es").lower()[:2]
-    if code == "en":
+    spanish = {
+        "hola esta ahi", "esta ahi", "sigue ahi", "me oye", "me escucha",
+    }
+    catalan = {
+        "em sent", "em sents", "hola em sents", "encara hi es",
+    }
+    if clean in english:
         return "Yes, I'm here and I can hear you. Please go ahead."
-    if code == "ca":
+    if clean in catalan:
         return "Sí, soc aquí i el sento bé. Digui'm, si us plau."
-    return "Sí, estoy aquí y le escucho bien. Dígame, por favor."
+    if clean in spanish:
+        return "Sí, estoy aquí y le escucho bien. Dígame, por favor."
+    return None

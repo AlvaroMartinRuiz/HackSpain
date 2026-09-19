@@ -35,12 +35,28 @@ def main() -> int:
         ("Spanish text", "Hola, necesito una cita por la mañana, por favor.", "es", "es"),
         ("Catalan text", "Bon dia, voldria demanar hora amb el metge, si us plau.", "es", "ca"),
         ("English text", "Hello, I need the earliest appointment please.", "en", "en"),
+        ("English hello", "Hello?", None, "en"),
+        ("Spanish hora is not Catalan", "Necesito hora por la mañana, por favor.", None, "es"),
     ]
     for label, text, hint, expected in samples:
         total += 1
         decision = decide_language(text, hint)
         passed += check(label, decision.code == expected,
                         f"{decision.code} {decision.confidence:.2f} via {decision.source}")
+
+    from src.agent.brain import _liveness_response, _ready_to_speak
+
+    total += 1
+    passed += check("Hello is not a line check", _liveness_response("Hello?", "es") is None)
+    total += 1
+    passed += check(
+        "Are you there is a line check in English",
+        (_liveness_response("Are you still there?", "es") or "").startswith("Yes"),
+    )
+    total += 1
+    passed += check("Short question speaks now", _ready_to_speak(["¿Hablo con Ella Smith?"]))
+    total += 1
+    passed += check("Filler waits", not _ready_to_speak(["Thank you."]))
 
     total += 1
     passed += check(

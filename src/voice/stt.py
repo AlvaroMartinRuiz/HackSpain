@@ -92,11 +92,18 @@ class DeepgramTranscriber:
 
         replacement = await self._connect(target)
         previous = self._socket
+        previous_reader = self._reader
         self._socket = replacement
         self._stream_language = target
         if target == "ca":
             self._language = "ca"
         self._reader = asyncio.create_task(self._read(replacement))
+        if previous_reader is not None and not previous_reader.done():
+            previous_reader.cancel()
+            try:
+                await previous_reader
+            except (asyncio.CancelledError, Exception):
+                pass
         if previous is not None:
             try:
                 await previous.close()
