@@ -243,24 +243,106 @@ def explicit_decline(text: str) -> bool:
         r"(?:okay |ok |de acuerdo |d'acord )?(?:thank you|thanks|gracias|gracies))", clean))
 
 
+_AFFIRMATIVE_START = re.compile(
+    r"^(?:yes|yeah|yep|yup|sure|of course|si|vale|ok|okay|perfect|perfecto|perfecta|perfecte|great|fine|"
+    r"correct|correcto|correcta|correcte|confirmo|confirm|i confirm|de acuerdo|d'acord|claro|adelante|"
+    r"endavant|genial|bien|muy bien|good|very good|estupendo)\b")
+_ACCEPTANCE = re.compile(
+    r"\b(?:me va bien|me viene bien|me parece bien|me sirve|em va be|em sembla be|em serveix|works for me|"
+    r"that works|that's fine|that is fine|sounds good|book it|go ahead|reservela|reservemela|reservamela|"
+    r"reservala|reservi-la|reserveu-la)\b")
+# Anything that qualifies, questions or reverses the yes: the caller is not consenting yet.
+_HEDGE = re.compile(
+    r"\b(?:no|not|nope|never|but|pero|wait|espera|espere|esperi|actually|instead|rather|prefer\w*|prefier\w*|"
+    r"prefereix\w*|change|cambi\w*|canvi\w*|another|other|otra|otro|otras|otros|altra|altre|don't|dont|cannot|"
+    r"can't|cant|unless|except|excepto|menos|maybe|perhaps|quizas|quiza|potser|tal vez|if|si no|"
+    r"too|also|tambien|tambe|ademas|"
+    # A new day or part of day is a changed request, not acceptance of the slot that was read out.
+    r"tomorrow|today|tonight|manana|hoy|dema|avui|next|proxim\w*|que viene|week|semana|setmana|"
+    r"morning|afternoon|evening|tarde|tarda|mati|noche|nit|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|lunes|martes|miercoles|jueves|viernes|sabado|"
+    r"domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)\b")
+_ORDINALS = {"first": 1, "primera": 1, "primer": 1, "primero": 1, "second": 2, "segunda": 2, "segundo": 2,
+             "segona": 2, "third": 3, "tercera": 3, "tercero": 3, "tercer": 3}
+_CARDINALS = {"one": 1, "uno": 1, "una": 1, "u": 1, "two": 2, "dos": 2, "dues": 2, "three": 3, "tres": 3}
+_COLLECTIVE = r"(?:both|all|ambas|ambos|los dos|las dos|ambdues|totes|tots|les dues)"
+
+
 def confirmation_selection(text: str) -> tuple[bool, int | None, bool]:
+    """(accepted, spoken option, collective) for a caller's reply to presented offers.
+
+    A natural "Sí, la primera opción me va bien" is consent; "yes but not that doctor",
+    a question, or anything longer than a short answer is not.
+    """
     if "?" in text or "¿" in text:
         return False, None, False
     clean = normalize_text(text).replace("’", "'")
+    # Clock times ("09:15", "9.30") name a slot's hour, never an option number.
+    clean = re.sub(r"\b\d{1,2}[:h.]\d{2}\b", " ", clean)
     clean = re.sub(r"[,!.;:]", " ", clean)
     clean = re.sub(r"\s+", " ", clean).strip()
-    affirmative = r"(?:yes|si|okay|ok|correct|correcte|correcto|confirmo|confirm|i confirm|d'acord|perfecte|adelante|endavant)"
-    numbers = {"one": 1, "first": 1, "uno": 1, "una": 1, "primera": 1, "primer": 1,
-               "two": 2, "second": 2, "dos": 2, "dues": 2, "segunda": 2, "segona": 2,
-               "three": 3, "third": 3, "tres": 3, "tercera": 3}
-    number = r"(?:[1-9]|10|" + "|".join(numbers) + r")"
-    option = rf"(?:(?:the |la |el )?(?:option|opcion|opcio) {number}|(?:the |la |el )?{number}(?: (?:option|opcion|opcio))?)"
-    collective = r"(?:both|all|ambas|ambos|los dos|las dos|ambdues|totes|tots|les dues)"
-    accepted = bool(re.fullmatch(rf"{affirmative}(?: {collective})?(?: {option})?(?: (?:please|por favor|si us plau|thanks|gracias|gracies))?", clean))
-    selection = None
-    if accepted:
-        remainder = re.sub(rf"\b{collective}\b", "", clean)
-        for token in remainder.split():
-            if token.isdigit() or token in numbers:
-                selection = int(token) if token.isdigit() else numbers[token]
-    return accepted, selection, bool(re.search(rf"\b{collective}\b", clean))
+    words = clean.split()
+    if not words or len(words) > 16 or _HEDGE.search(clean):
+        return False, None, False
+    # Without accents "sí" (yes) and "si" (if) are one word: past the opening yes it is a condition.
+    if "si" in words[1:]:
+        return False, None, False
+    if not (_AFFIRMATIVE_START.search(clean) or _ACCEPTANCE.search(clean)):
+        return False, None, False
+    collective = bool(re.search(rf"\b{_COLLECTIVE}\b", clean))
+    remainder = re.sub(rf"\b{_COLLECTIVE}\b", " ", clean)
+    remainder = re.sub(r"\b(?:a las|a la|at|les|a les)\s+\w+", " ", remainder)
+    found = set()
+    for match in re.finditer(r"\b(?:option|opcion|opcio|number|numero)\s+(\w+)|\b(?:la|el|the)\s+(\d{1,2})\b", remainder):
+        token = match[1] or match[2]
+        if token.isdigit():
+            found.add(int(token))
+        elif token in _CARDINALS or token in _ORDINALS:
+            found.add(_CARDINALS.get(token) or _ORDINALS[token])
+    found.update(value for word, value in _ORDINALS.items() if re.search(rf"\b{word}\b", remainder))
+    if len(found) > 1:
+        return False, None, False
+    return True, (found.pop() if found else None), collective
+
+
+_WEEKDAYS = {"en": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+             "es": ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"],
+             "ca": ["dilluns", "dimarts", "dimecres", "dijous", "divendres", "dissabte", "diumenge"]}
+_MONTHS = {"en": ["January", "February", "March", "April", "May", "June", "July", "August", "September",
+                  "October", "November", "December"],
+           "es": ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
+                  "octubre", "noviembre", "diciembre"],
+           "ca": ["gener", "febrer", "març", "abril", "maig", "juny", "juliol", "agost", "setembre",
+                  "octubre", "novembre", "desembre"]}
+
+
+def spoken_when(value: str, language: str) -> str:
+    """ "2026-09-21 09:00" as a receptionist says it; anything else is returned unchanged."""
+    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})", value.strip())
+    if not match:
+        return value
+    year, month, day, hour, minute = (int(part) for part in match.groups())
+    try:
+        weekday = date(year, month, day).weekday()
+    except ValueError:
+        return value
+    language = language if language in _MONTHS else "en"
+    clock = f"{hour}:{minute:02d}"
+    name, month_name = _WEEKDAYS[language][weekday], _MONTHS[language][month - 1]
+    if language == "es":
+        return f"el {name} {day} de {month_name} a las {clock}"
+    if language == "ca":
+        return f"{name} {day} {'d' + chr(39) if month_name[0] in 'ao' else 'de '}{month_name} a les {clock}"
+    return f"{name} {day} {month_name} at {clock}"
+
+
+def without_repeats(text: str) -> str:
+    """Drop a sentence already said earlier in the same reply."""
+    seen, kept = set(), []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        key = normalize_text(sentence)
+        if key and key in seen:
+            continue
+        seen.add(key)
+        kept.append(sentence)
+    return " ".join(kept)

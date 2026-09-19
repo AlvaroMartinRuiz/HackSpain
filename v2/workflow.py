@@ -13,7 +13,7 @@ from v2.domain.triage import triage
 from v2.language import decide_language, should_apply_language
 from v2.clinic import Dispatcher
 from v2.models import MAX_CALL_TURNS, CallState, Identity, Intent, Operation, RegistrationFields, Reply, SchedulingCriteria, TurnDecision
-from v2.domain_rules import FIELDS, collection_prompt, confirmation_selection, explicit_decline, identity_problems, reason_text, requested_clock, resolve_request_when, unsupported_time_request
+from v2.domain_rules import FIELDS, collection_prompt, confirmation_selection, spoken_when, without_repeats, explicit_decline, identity_problems, reason_text, requested_clock, resolve_request_when, unsupported_time_request
 from v2.store import RunStore
 
 TEXT = {
@@ -233,7 +233,7 @@ class CallController:
                     lines.append(line)
             return {"reply": Reply(text=" ".join(lines) or (self._next_prompt() if corrections else TEXT[language]["confirm"]),
                                     language=language, epoch=flow["epoch"], offers=offered)}
-        operations = [op for op in decision.operations if op.op != "finish"]
+        operations = self._expand_creates([op for op in decision.operations if op.op != "finish"], text)
         finish = any(op.op == "finish" for op in decision.operations)
         failed = False
         for op in operations:
@@ -259,7 +259,7 @@ class CallController:
         if finish and not failed:
             self.state.completion_requested = self.state.all_resolved
             lines.append(TEXT[language]["done"] if self.state.all_resolved else self._next_prompt())
-        return {"reply": Reply(text=" ".join(lines) or self._next_prompt(), language=language,
+        return {"reply": Reply(text=without_repeats(" ".join(lines)) or self._next_prompt(), language=language,
                                 epoch=flow["epoch"], offers=offered,
                                 completion=self.state.completion_requested and self.state.all_resolved)}
 
@@ -516,7 +516,8 @@ class CallController:
                 "intent_id": intent.intent_id, "revision": intent.revision,
                 "offers": [offer.model_dump() for offer in intent.offers],
             })
-            return " ".join(self._describe_offer(intent, offer, index) for index, offer in enumerate(intent.offers, 1))
+            options = " ".join(self._describe_offer(intent, offer, index) for index, offer in enumerate(intent.offers, 1))
+            return f"{options} {TEXT[language]['confirm']}"
         if op.op == "confirm":
             offer = self._confirmed_offer(intent, op, text)
             receipt = await self._submit(intent, offer.action, offer.payload)
@@ -535,6 +536,86 @@ class CallController:
             return reason_text(reason if receipt["accepted"] else None, language)
         raise ValueError("operation not allowed in this state")
 
+    def _expand_creates(self, operations: list[Operation], text: str = "") -> list[Operation]:
+        """Complete the create, identify, prepare sequence the model often compresses.
+
+        Models answer "I'm Rosa, born 7 August 1962, I want a GP" either with one create
+        holding everything (create alone keeps none of it) or with no create at all, the
+        action carried by another step. Only an action the decision states is ever used,
+        and each added step passes through its own guards with the same evidence.
+        """
+        operations = self._implicit_creates(operations, text)
+        creates = {op.intent_id: op for op in operations if op.op == "create" and op.action != "register"}
+        expanded = []
+        for op in operations:
+            expanded.append(op)
+            if op.op == "create" and op.intent_id in creates and op.identity is not None and not any(
+                    other.op == "identify" and other.intent_id == op.intent_id for other in operations):
+                expanded.append(Operation(op="identify", intent_id=op.intent_id, evidence=op.evidence, identity=op.identity))
+        # Scheduling details the model put on create, identify or ask go through prepare, after identification.
+        keys = ("specialty_id", "when", "doctor_name", "location_id", "appointment_id")
+        for intent_id in dict.fromkeys(op.intent_id for op in operations if op.intent_id):
+            own = [op for op in operations if op.intent_id == intent_id]
+            # Only a request being set up; a confirm or refusal that repeats the criteria changes nothing.
+            if any(op.op not in {"create", "identify", "ask"} for op in own):
+                continue
+            known = self.state.intents.get(intent_id)
+            action = known.action if known else (creates[intent_id].action if intent_id in creates else None)
+            if action is None or action == "register":
+                continue
+            scheduling = {key: next(getattr(op, key) for op in own if getattr(op, key) is not None)
+                          for key in keys if any(getattr(op, key) is not None for op in own)}
+            criteria = next((op.criteria for op in own if op.criteria is not None), None)
+            if scheduling or criteria is not None:
+                # The offers answer the model's own "which appointment?" question.
+                expanded = [op for op in expanded if not (op.op == "ask" and op.intent_id == intent_id)]
+                expanded.append(Operation(op="prepare", intent_id=intent_id, evidence=own[0].evidence,
+                                          criteria=criteria, **scheduling))
+        return expanded
+
+    def _implicit_creates(self, operations: list[Operation], text: str = "") -> list[Operation]:
+        stepping = {"identify", "prepare", "ask"}
+        created = {op.intent_id for op in operations if op.op == "create"}
+        unknown = [op for op in operations if op.op in stepping and op.intent_id
+                   and op.intent_id not in self.state.intents and op.intent_id not in created and op.intent_id != "urgent"]
+        if not unknown:
+            return operations
+        actions: dict[str, set] = {}
+        for op in unknown:
+            actions.setdefault(op.intent_id, set())
+            if op.action:
+                actions[op.intent_id].add(op.action)
+        # No action stated at all: a named specialty or doctor with no existing appointment in play,
+        # and no cancel/move wording, can only be a new booking. It still needs an accepted offer.
+        if not any(actions.values()) and len(actions) == 1 and not self.state.intents:
+            own = [op for op in operations if op.intent_id in actions]
+            wants = any(op.specialty_id or op.doctor_name or (op.criteria and op.criteria.specialty_id) for op in own)
+            existing = any(op.appointment_id or (op.criteria and (op.criteria.appointment_when or op.criteria.appointment_id))
+                           for op in own)
+            other = re.search(r"\b(cancel\w*|anul\w*|reschedul\w*|move|mover|cambi\w*|canvi\w*|moure|registr\w*|alta)\b",
+                              normalize_text(text))
+            if wants and not existing and not other:
+                actions[next(iter(actions))].add("book")
+        with_action = [key for key, found in actions.items() if len(found) == 1]
+        without = [key for key, found in actions.items() if not found]
+        if any(len(found) > 1 for found in actions.values()):
+            return operations
+        # One request split across two references: the action on one, the identity on the other.
+        if len(with_action) == 1 and len(without) == 1 and not self.state.intents:
+            target, stray = with_action[0], without[0]
+            operations = [op.model_copy(update={"intent_id": target}) if op.intent_id == stray else op for op in operations]
+            without = []
+        if without:
+            return operations
+        creates = []
+        for key in with_action:
+            own = [op for op in operations if op.intent_id == key]
+            identity = next((op.identity for op in own if op.identity is not None), None)
+            creates.append(Operation(op="create", intent_id=key, action=next(iter(actions[key])),
+                                     subject=(identity.name if identity and identity.name else "caller"),
+                                     evidence=own[0].evidence))
+        return creates + operations
+
     @staticmethod
     def _evidence(op: Operation, text: str):
         if not op.evidence.strip() or normalize_text(op.evidence) not in normalize_text(text):
@@ -546,7 +627,8 @@ class CallController:
         if intent.action == "register":
             values = ", ".join(f"{FIELDS[language].get(key, key)}: {value}" for key, value in d.items())
         else:
-            values = ", ".join(str(d.get(key, "")) for key in ("patient", "doctor", "site", "when"))
+            values = ", ".join(spoken_when(str(d.get(key, "")), language) if key == "when" else str(d.get(key, ""))
+                               for key in ("patient", "doctor", "site", "when"))
         verb = {"en": {"book": "Book", "cancel": "Cancel", "reschedule": "Move", "register": "Register"},
                 "es": {"book": "Reservar", "cancel": "Cancelar", "reschedule": "Cambiar", "register": "Registrar"},
                 "ca": {"book": "Reservar", "cancel": "Cancel·lar", "reschedule": "Canviar", "register": "Registrar"}}[language]
@@ -557,11 +639,12 @@ class CallController:
                      "ca": "Alternativa, no és la data o hora sol·licitada"}[language]
             explanation = reason_text(d.get("alternative_reason") or "no_availability", language) + " " + label + ". "
         if d.get("previous"):
-            old = ", ".join(str(d["previous"].get(key) or "") for key in ("doctor", "site", "when"))
+            old = ", ".join(spoken_when(str(d["previous"].get(key) or ""), language) if key == "when"
+                            else str(d["previous"].get(key) or "") for key in ("doctor", "site", "when"))
             values = {"en": f"from {old} to {values}", "es": f"de {old} a {values}", "ca": f"de {old} a {values}"}[language]
         if d.get("policy"):
             values += {"en": ", using plan ", "es": ", con el seguro ", "ca": ", amb l'assegurança "}[language] + d["policy"]
-        return f"{explanation}{prefix} {option}: {verb[intent.action]} {values}. {TEXT[language]['confirm']}"
+        return f"{explanation}{prefix} {option}: {verb[intent.action]} {values}."
 
     def presented(self, reply: Reply, *, interrupted: bool = False):
         if interrupted or reply.epoch != self.epoch or reply != self.pending_reply:
