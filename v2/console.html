@@ -1,77 +1,58 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Socket Wizard v2 laboratory</title>
-<style>
-:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101622; color: #edf2fa; }
-body { max-width: 1000px; margin: 40px auto; padding: 0 24px; }
-h1 { font-size: 30px; } p { color: #b8c5d9; line-height: 1.6; }
-section { padding: 20px; border: 1px solid #334158; border-radius: 12px; margin: 20px 0; }
-input, button { font: inherit; padding: 10px; border-radius: 6px; border: 1px solid #526584; }
-input { width: min(65%, 450px); } button { cursor: pointer; background: #83c9e8; color: #142333; }
-button:disabled { opacity: .5; cursor: wait; } pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-#transcript article { padding: 12px; border-bottom: 1px solid #334158; }
-#transcript strong { display: block; color: #83c9e8; }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Socket Wizard · Operator</title>
+  <link rel="stylesheet" href="/web/ops.css">
+  <script type="module" src="/web/app.mjs"></script>
 </head>
 <body>
-<h1>Socket Wizard v2 laboratory</h1>
-<p>Pipecat audio, LangGraph intent ledger, typed actions, and Jev assessment adapter. This deployment is isolated from the current receptionist. Live cutover is disabled.</p>
-<section><h2>Readiness</h2><pre id="health">Loading…</pre></section>
-<section>
-<h2>Run the offline two-intent demo</h2>
-<p>This uses synthetic fixtures, not an LLM caller. It consumes no API credits and never submits to Prosper. Enter the local operator token; it stays in this page's memory.</p>
-<input id="token" type="password" autocomplete="off" placeholder="V2 operator token">
-<select id="language" aria-label="Fixture language"><option value="es">Español</option><option value="en">English</option><option value="ca">Català</option></select>
-<button id="run">Run fixture</button>
-<p id="status" role="status"></p>
-<div id="transcript"></div>
-</section>
-<section><h2>Measurements</h2><pre id="metrics">No run yet.</pre></section>
-<section><h2>Reserved API budget</h2><pre id="budget">Authenticate to view. Reservations are conservative allowances, not provider invoices.</pre></section>
-<details><summary>Full versioned event trace</summary><pre id="trace"></pre></details>
-<script type="module">
-const el = (id) => document.getElementById(id);
-const pretty = (value) => JSON.stringify(value, null, 2);
-try {
-  el('health').textContent = pretty(await (await fetch('/health')).json());
-} catch {
-  el('health').textContent = 'Backend unavailable';
-}
-el('run').addEventListener('click', async () => {
-  el('run').disabled = true;
-  el('status').textContent = 'Running synthetic fixture…';
-  const headers = { 'X-V2-Token': el('token').value, 'Content-Type': 'application/json' };
-  try {
-    const input = await fetch(`/api/demo?language=${encodeURIComponent(el('language').value)}`, { headers });
-    if (!input.ok) throw new Error(`Access failed: HTTP ${input.status}`);
-    const response = await fetch('/api/rehearse', { method: 'POST', headers, body: JSON.stringify(await input.json()) });
-    if (!response.ok) throw new Error(`Rehearsal failed: HTTP ${response.status}`);
-    const run = await response.json();
-    el('status').textContent = `Run ${run.run_id}. Official score: unknown.`;
-    el('metrics').textContent = pretty(run.metrics);
-    el('trace').textContent = pretty(run);
-    el('transcript').replaceChildren();
-    for (const event of run.events) {
-      if (!['caller_turn', 'response_planned'].includes(event.kind)) continue;
-      const row = document.createElement('article');
-      const who = document.createElement('strong');
-      who.textContent = event.kind === 'caller_turn' ? 'Caller' : 'Agent (text simulation)';
-      const text = document.createElement('span');
-      text.textContent = event.payload.text;
-      row.append(who, text);
-      el('transcript').append(row);
-    }
-    const budget = await fetch('/api/budget', { headers });
-    if (budget.ok) el('budget').textContent = pretty(await budget.json());
-  } catch (error) {
-    el('status').textContent = error.message;
-  } finally {
-    el('run').disabled = false;
-  }
-});
-</script>
+  <a class="skip" href="#main">Skip to workspace</a>
+  <header class="top">
+    <a class="brand" href="#overview"><img class="mark" src="/web/assets/mark-socket-wizard.svg" alt=""><span><strong>Socket Wizard</strong><small>Clínica Arenal · v2 operator</small></span></a>
+    <nav class="nav" aria-label="Main"><a href="#overview" aria-current="page">Overview</a><a href="#runs">Runs</a><a href="#talk">Rehearse</a></nav>
+    <div class="header-end"><span id="connection" class="pill">Connecting…</span><span id="active-session" class="pill warn" role="status" hidden></span><button id="global-stop" class="btn danger" hidden>End session</button><button id="logout" class="btn ghost" hidden>Lock workspace</button></div>
+  </header>
+  <main id="main" class="page">
+    <section class="auth panel" id="auth-panel" aria-labelledby="auth-title">
+      <div><h2 id="auth-title">Unlock your workspace</h2><p>The operator token stays in page memory only. Locking clears private data and stops this browser’s microphone.</p></div>
+      <form id="auth-form"><label for="token">Operator token</label><div class="row"><input id="token" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" required placeholder="V2 operator token"><button class="btn" id="unlock" type="submit">Unlock</button></div></form>
+    </section>
+    <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
+    <section id="view-overview" class="view" aria-labelledby="overview-title">
+      <div class="page-head"><div><p class="eyebrow">Floor</p><h1 id="overview-title">Ready for the next conversation</h1><p class="lede">An observable receptionist. Simulation and read-only practice — no live submissions.</p></div><a class="btn" href="#talk">Rehearse a call</a></div>
+      <div class="kpis">
+        <article class="kpi"><span>Backend</span><strong id="backend-status">Checking…</strong><small>Reachability is not provider validation</small></article>
+        <article class="kpi"><span>Voice configuration</span><strong id="voice-ready">Unknown</strong><small>Stock voices first · microphone over localhost or HTTPS</small></article>
+        <article class="kpi"><span>Loaded runs</span><strong id="run-count">—</strong><small>Authenticated history, refreshed every 5 seconds</small></article>
+        <article class="kpi"><span>Official score</span><strong>Unknown</strong><small>No official grading feed is imported</small></article>
+      </div>
+      <div class="overview-grid">
+        <section class="panel"><div class="panel-head"><h2>Readiness</h2><button id="refresh" class="btn ghost">Refresh</button></div><p id="readiness-summary">Contacting the backend…</p><ul id="missing" class="check-list"></ul><details><summary>Configuration evidence</summary><pre id="health-json">Waiting for /health</pre></details></section>
+        <section class="panel"><h2>API budget</h2><p>Conservative reservations are not invoices. Unknown outcomes remain reserved.</p><dl class="budget-grid"><div><dt>Unreconciled reserved</dt><dd id="budget-reserved">—</dd></div><div><dt>Reconciled actual</dt><dd id="budget-actual">—</dd></div><div><dt>Local allowance left</dt><dd id="budget-remaining">—</dd></div><div><dt>Authorized local cap</dt><dd id="budget-cap">—</dd></div></dl><p id="budget-note" class="muted">Unlock to view the local ledger. It is not an account-wide provider cap.</p></section>
+      </div>
+      <section class="panel"><div class="panel-head"><h2>Recent runs</h2><a href="#runs" class="panel-link">Inspect history</a></div><div id="recent-runs" class="recent-list"><p class="empty">Unlock to load actual stored runs.</p></div></section>
+    </section>
+    <section id="view-runs" class="view" hidden aria-labelledby="runs-title">
+      <div class="page-head"><div><p class="eyebrow">History</p><h1 id="runs-title">Every run, with its evidence</h1><p id="poll-status" class="lede">Unlock to load history.</p></div><label class="filter-label" for="run-filter">Show <select id="run-filter"><option value="all">All runs</option><option value="errors">With errors</option><option value="silent">Silent audio</option><option value="unknown">Audio unknown</option><option value="missing">No action receipt</option></select></label></div>
+      <section class="panel history"><div class="table-wrap"><table><caption class="sr-only">Stored runs. Select a run to inspect its report.</caption><thead><tr><th>Run / started</th><th>Mode / language</th><th>Status</th><th>Intents resolved</th><th>Audio output</th><th>Errors</th><th>Official score</th></tr></thead><tbody id="runs-body"></tbody></table></div><p id="history-empty" class="empty">Unlock to load actual stored runs.</p><div class="history-foot"><button id="load-more" class="btn ghost" disabled>Load older runs</button></div></section>
+      <section id="run-detail" class="detail" hidden aria-labelledby="detail-title">
+        <aside class="panel call-rail"><p class="eyebrow">Selected run</p><h2 id="detail-title">Run</h2><p id="detail-meta" class="muted"></p><dl id="detail-stats" class="stat-list"></dl><h3>Recordings</h3><p class="muted">Protected audio, fetched only on request. Playback is preserved while reports refresh.</p><div id="recordings"></div><p class="fine">Socket audio metrics do not prove caller playback. Browser playback acknowledgements are not sent.</p></aside>
+        <section class="panel conversation"><div class="panel-head"><h2>Transcript</h2><span id="transcript-count" class="pill"></span></div><p class="fine">“Planned response” is not proof of spoken delivery.</p><div id="transcript" class="transcript"></div></section>
+        <aside class="panel inspector"><h2>Evidence</h2><div class="tabs" role="tablist" aria-label="Run evidence"><button id="tab-actions" role="tab" aria-selected="true" aria-controls="evidence-actions" data-evidence="actions">Actions</button><button id="tab-timings" role="tab" aria-selected="false" tabindex="-1" aria-controls="evidence-timings" data-evidence="timings">Timings</button><button id="tab-errors" role="tab" aria-selected="false" tabindex="-1" aria-controls="evidence-errors" data-evidence="errors">Errors</button><button id="tab-grades" role="tab" aria-selected="false" tabindex="-1" aria-controls="evidence-grades" data-evidence="grades">Grades</button></div><div id="evidence-actions" role="tabpanel" aria-labelledby="tab-actions"></div><div id="evidence-timings" role="tabpanel" aria-labelledby="tab-timings" hidden></div><div id="evidence-errors" role="tabpanel" aria-labelledby="tab-errors" hidden></div><div id="evidence-grades" role="tabpanel" aria-labelledby="tab-grades" hidden></div><details><summary>Versioned trace &amp; manifest</summary><pre id="trace"></pre></details></aside>
+      </section>
+    </section>
+    <section id="view-talk" class="view" hidden aria-labelledby="talk-title">
+      <div class="page-head"><div><p class="eyebrow">Sandbox</p><h1 id="talk-title">Rehearse a conversation</h1><p class="lede">Test natural conversation as text or use your microphone. Neither mode submits to Prosper.</p></div></div>
+      <div class="talk-grid">
+        <aside class="panel setup"><h2>Session setup</h2><label for="language">Language</label><select id="language"><option value="es">Español</option><option value="en">English</option><option value="ca">Català</option></select><label for="mode">Environment</label><select id="mode"><option value="simulation">Simulation · fixture clinic</option><option value="practice">Practice · read-only clinic</option></select><p class="fine">Simulation changes clinic data, not model cost. Natural text and microphone sessions both use real paid providers.</p><label class="check"><input id="paid-consent" type="checkbox"> I authorize this paid session against the shared API allowance.</label><div class="stack"><button id="start-text" class="btn" disabled>Start text · paid</button><button id="start-voice" class="btn secondary" disabled>Start microphone · paid</button><button id="stop-session" class="btn danger" disabled>End session</button></div><p id="session-status" role="status" aria-live="polite">No active session.</p><p id="mic-help" class="fine">Allow microphone access when prompted. Localhost works without public HTTPS. Headphones reduce echo; use End session to release the microphone.</p><hr><h3>Offline two-intent fixture</h3><p>Scripted input and decisions, no model or voice quota. Always simulated, in your selected language.</p><button id="fixture" class="btn ghost" disabled>Run free fixture</button><p id="fixture-status" role="status"></p></aside>
+        <section class="panel conversation"><div class="panel-head"><h2>Conversation</h2><button id="inspect-session" class="btn ghost" disabled>Inspect run</button></div><div id="talk-transcript" class="transcript talk-transcript"><p class="empty">Start a session to speak or type naturally. No canned live success is displayed.</p></div><form id="turn-form"><label for="turn">Your next message</label><textarea id="turn" rows="3" maxlength="2000" disabled placeholder="What would you like help with?"></textarea><div class="composer-foot"><span class="fine">Text messages spend model quota. Enter a message, then Send.</span><button id="send-turn" class="btn" type="submit" disabled>Send</button></div></form></section>
+      </div>
+    </section>
+  </main>
+  <footer>Socket Wizard v2 · Local completion, HTTP acceptance, fixture checks and model assessment are not official scores.</footer>
+  <noscript>This operator workspace requires JavaScript. No paid session starts automatically.</noscript>
 </body>
 </html>
