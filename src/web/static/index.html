@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>El Turno · consola de llamadas</title>
+<link rel="stylesheet" href="/static/console.css" />
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="dot" id="link-dot"></span>
+    <h1>El Turno</h1>
+    <span class="sub" id="clinic-name">Clínica Arenal</span>
+  </div>
+  <div class="pills" id="pills"></div>
+  <div class="counters">
+    <div class="counter"><b id="stat-live">0</b><span>en curso</span></div>
+    <div class="counter"><b id="stat-peak">0</b><span>pico</span></div>
+    <div class="counter"><b id="stat-latency">–</b><span>respuesta p50</span></div>
+    <div class="counter"><b id="stat-silent">0</b><span>sin registro</span></div>
+  </div>
+</header>
+
+<main>
+  <section class="panel calls">
+    <h2>Llamadas</h2>
+    <div class="group-label">En curso</div>
+    <ul id="live-list" class="call-list"><li class="empty">Nadie al teléfono</li></ul>
+    <div class="group-label">Recientes</div>
+    <ul id="recent-list" class="call-list"><li class="empty">Sin historial</li></ul>
+  </section>
+
+  <section class="panel conversation">
+    <div class="call-head" id="call-head">
+      <div class="call-head-empty">Selecciona una llamada para verla en directo</div>
+    </div>
+    <div class="transcript" id="transcript"></div>
+    <div class="partial" id="partial"></div>
+  </section>
+
+  <section class="panel why">
+    <h2>Por qué dijo eso</h2>
+    <div class="tabs">
+      <button class="tab active" data-tab="decisions">Decisiones</button>
+      <button class="tab" data-tab="tools">Herramientas</button>
+      <button class="tab" data-tab="record">Registro</button>
+    </div>
+    <div class="tab-body" id="tab-decisions"></div>
+    <div class="tab-body hidden" id="tab-tools"></div>
+    <div class="tab-body hidden" id="tab-record"></div>
+  </section>
+</main>
+
+<script src="/static/console.js"></script>
+</body>
+</html>

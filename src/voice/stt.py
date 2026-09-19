@@ -1,0 +1,225 @@
+"""Turning the caller's audio into turns.
+
+Deepgram streams and does its own endpointing, which is what makes barge-in
+possible. The Whisper path is there so a team with only one API key can still
+take a call, at the cost of waiting for the pause.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import urllib.parse
+from typing import Awaitable, Callable, Optional
+
+import httpx
+
+from src.config import settings
+from src.voice.audio import FRAME_MS, ulaw_to_wav
+from src.voice.vad import EnergyVAD
+
+OnPartial = Callable[[str], Awaitable[None]]
+OnFinal = Callable[[str, Optional[str]], Awaitable[None]]
+OnSpeechStart = Callable[[], Awaitable[None]]
+
+DEEPGRAM_URL = "wss://api.deepgram.com/v1/listen"
+
+
+class DeepgramTranscriber:
+    def __init__(
+        self,
+        on_partial: OnPartial,
+        on_final: OnFinal,
+        on_speech_started: Optional[OnSpeechStart] = None,
+    ) -> None:
+        self.on_partial = on_partial
+        self.on_final = on_final
+        self.on_speech_started = on_speech_started
+        self._socket = None
+        self._reader: Optional[asyncio.Task] = None
+        self._pending: list[str] = []
+        self._language: Optional[str] = None
+        self._closed = False
+
+    def _url(self) -> str:
+        params = {
+            "model": settings.deepgram_model,
+            "language": settings.deepgram_language,
+            "encoding": "mulaw",
+            "sample_rate": "8000",
+            "channels": "1",
+            "interim_results": "true",
+            "punctuate": "true",
+            "smart_format": "true",
+            "vad_events": "true",
+            "endpointing": str(settings.stt_endpointing_ms),
+            "utterance_end_ms": str(settings.stt_utterance_end_ms),
+        }
+        return f"{DEEPGRAM_URL}?{urllib.parse.urlencode(params)}"
+
+    async def start(self) -> None:
+        import websockets
+
+        headers = {"Authorization": f"Token {settings.deepgram_api_key}"}
+        try:
+            self._socket = await websockets.connect(self._url(), additional_headers=headers)
+        except TypeError:  # websockets < 14 named it differently
+            self._socket = await websockets.connect(self._url(), extra_headers=headers)
+        self._reader = asyncio.create_task(self._read())
+
+    async def push(self, ulaw_frame: bytes) -> None:
+        if self._socket is None or self._closed:
+            return
+        try:
+            await self._socket.send(ulaw_frame)
+        except Exception:
+            self._closed = True
+
+    async def finish(self) -> None:
+        self._closed = True
+        if self._socket is not None:
+            try:
+                await self._socket.send(json.dumps({"type": "CloseStream"}))
+            except Exception:
+                pass
+        if self._reader is not None:
+            self._reader.cancel()
+            try:
+                await self._reader
+            except (asyncio.CancelledError, Exception):
+                pass
+        if self._socket is not None:
+            try:
+                await self._socket.close()
+            except Exception:
+                pass
+
+    async def _read(self) -> None:
+        assert self._socket is not None
+        try:
+            async for raw in self._socket:
+                try:
+                    message = json.loads(raw)
+                except (ValueError, TypeError):
+                    continue
+                await self._handle(message)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+
+    async def _handle(self, message: dict) -> None:
+        kind = message.get("type")
+
+        if kind == "SpeechStarted":
+            if self.on_speech_started is not None:
+                await self.on_speech_started()
+            return
+
+        if kind == "UtteranceEnd":
+            await self._flush()
+            return
+
+        if kind != "Results":
+            return
+
+        channel = message.get("channel") or {}
+        alternatives = channel.get("alternatives") or [{}]
+        transcript = (alternatives[0].get("transcript") or "").strip()
+        languages = alternatives[0].get("languages") or channel.get("languages")
+        if languages:
+            self._language = str(languages[0])[:2]
+
+        if not transcript:
+            return
+
+        if message.get("is_final"):
+            self._pending.append(transcript)
+            if message.get("speech_final"):
+                await self._flush()
+        else:
+            # An interim result is the earliest sign the caller has started.
+            await self.on_partial(transcript)
+
+    async def _flush(self) -> None:
+        text = " ".join(part for part in self._pending if part).strip()
+        self._pending.clear()
+        if text:
+            await self.on_final(text, self._language)
+
+
+class WhisperTranscriber:
+    """Buffers a turn behind an energy gate, then transcribes it in one go."""
+
+    def __init__(
+        self,
+        on_partial: OnPartial,
+        on_final: OnFinal,
+        on_speech_started: Optional[OnSpeechStart] = None,
+    ) -> None:
+        self.on_partial = on_partial
+        self.on_final = on_final
+        self.on_speech_started = on_speech_started
+        self._vad = EnergyVAD()
+        self._buffer = bytearray()
+        self._client = httpx.AsyncClient(
+            base_url=settings.llm_base_url,
+            headers={"Authorization": f"Bearer {settings.llm_api_key}"},
+            timeout=httpx.Timeout(30.0, connect=6.0),
+        )
+        self._announced = False
+
+    async def start(self) -> None:
+        return None
+
+    async def push(self, ulaw_frame: bytes) -> None:
+        event = self._vad.feed(ulaw_frame)
+        if self._vad.speaking:
+            self._buffer.extend(ulaw_frame)
+        if event == "start":
+            self._announced = False
+            if self.on_speech_started is not None:
+                await self.on_speech_started()
+        elif event == "start" or (self._vad.speaking and not self._announced):
+            self._announced = True
+        elif event == "end":
+            await self._transcribe()
+
+    async def finish(self) -> None:
+        if self._buffer:
+            await self._transcribe()
+        await self._client.aclose()
+
+    async def _transcribe(self) -> None:
+        audio = bytes(self._buffer)
+        self._buffer.clear()
+        # Anything under a third of a second is a cough, not a turn.
+        if len(audio) < (8000 // 1000) * 300:
+            return
+        try:
+            response = await self._client.post(
+                "/audio/transcriptions",
+                files={"file": ("turn.wav", ulaw_to_wav(audio), "audio/wav")},
+                data={"model": "whisper-1"},
+            )
+            if response.status_code != 200:
+                return
+            text = (response.json().get("text") or "").strip()
+        except Exception:
+            return
+        if text:
+            await self.on_final(text, None)
+
+
+def build_transcriber(
+    on_partial: OnPartial,
+    on_final: OnFinal,
+    on_speech_started: Optional[OnSpeechStart] = None,
+):
+    provider = settings.stt_provider
+    if provider == "deepgram" and settings.deepgram_api_key:
+        return DeepgramTranscriber(on_partial, on_final, on_speech_started)
+    return WhisperTranscriber(on_partial, on_final, on_speech_started)
+
+
+__all__ = ["build_transcriber", "DeepgramTranscriber", "WhisperTranscriber", "FRAME_MS"]

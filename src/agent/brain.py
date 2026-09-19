@@ -1,0 +1,196 @@
+"""The turn loop: what the caller said in, speech and tool calls out."""
+
+from __future__ import annotations
+
+import re
+import time
+from typing import TYPE_CHECKING, Any, Optional
+
+from src.agent.llm import Completion, LLMClient, LLMError
+from src.agent.prompt import build_system_prompt, chart_briefing
+from src.agent.tools import ToolBox
+from src.config import settings
+
+if TYPE_CHECKING:  # pragma: no cover
+    from src.telephony.session import CallSession
+
+SENTENCE_END = re.compile(r"(?<=[.!?…])\s+|(?<=[.!?…])$|\n+")
+SOFT_BREAK = re.compile(r"(?<=[,;:])\s+")
+MAX_HISTORY_MESSAGES = 26
+SOFT_FLUSH_CHARS = 130
+
+
+class Agent:
+    def __init__(self, session: "CallSession", llm: LLMClient) -> None:
+        self.session = session
+        self.llm = llm
+        self.tools = ToolBox(session)
+        self.messages: list[dict[str, Any]] = [
+            {"role": "system", "content": build_system_prompt(session.catalog, session.from_number)}
+        ]
+        self._buffer = ""
+
+    # ---- conversation -------------------------------------------------
+
+    async def greet(self) -> None:
+        greeting = settings.greeting
+        self.messages.append({"role": "assistant", "content": greeting})
+        await self.session.say(greeting, first=True)
+
+    async def handle(self, text: str) -> None:
+        """One caller turn, start to finish."""
+        started = time.perf_counter()
+        self.messages.append({"role": "user", "content": text})
+        self._trim()
+
+        spoke = False
+        for round_index in range(settings.llm_max_tool_rounds):
+            try:
+                completion = await self._run_round()
+            except LLMError as exc:
+                await self.session.record("error", {"where": "llm", "detail": str(exc)})
+                await self.session.say(
+                    "Perdone, no le he oído bien. ¿Me lo repite, por favor?"
+                )
+                return
+
+            spoke = spoke or bool(completion.text.strip())
+
+            if not completion.wants_tools:
+                if completion.text.strip():
+                    self.messages.append({"role": "assistant", "content": completion.text})
+                break
+
+            self.messages.append({
+                "role": "assistant",
+                "content": completion.text or None,
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {"name": call.name, "arguments": call.arguments or "{}"},
+                    }
+                    for call in completion.tool_calls
+                ],
+            })
+
+            for call in completion.tool_calls:
+                await self._run_tool(call.id, call.name, call.parsed_arguments())
+
+            if round_index == settings.llm_max_tool_rounds - 1:
+                await self.session.record("error", {
+                    "where": "tool_loop", "detail": "hit the tool round cap",
+                })
+
+        if not spoke:
+            await self.session.say("Un momento, por favor.")
+
+        await self.session.note_response_latency(int((time.perf_counter() - started) * 1000))
+
+    async def _run_round(self) -> Completion:
+        """Stream one completion, speaking each sentence as it lands."""
+        self._buffer = ""
+        completion: Optional[Completion] = None
+
+        async for kind, value in self.llm.stream(self.messages, self.tools.schemas()):
+            if kind == "text":
+                self._buffer += value
+                for sentence in self._drain():
+                    await self.session.say(sentence)
+            else:
+                completion = value
+
+        tail = self._buffer.strip()
+        if tail:
+            await self.session.say(tail)
+        self._buffer = ""
+
+        assert completion is not None
+        await self.session.record("llm", {
+            "elapsed_ms": completion.elapsed_ms,
+            "first_token_ms": completion.first_token_ms,
+            "tokens_in": completion.tokens_in,
+            "tokens_out": completion.tokens_out,
+            "tools": [call.name for call in completion.tool_calls],
+            "finish_reason": completion.finish_reason,
+        })
+        return completion
+
+    def _drain(self) -> list[str]:
+        """Pull whole sentences out of the buffer so speech starts early."""
+        out: list[str] = []
+        while True:
+            match = SENTENCE_END.search(self._buffer)
+            if match and match.end() > 0:
+                sentence = self._buffer[: match.start()].strip()
+                self._buffer = self._buffer[match.end() :]
+                if sentence:
+                    out.append(sentence)
+                continue
+            if len(self._buffer) >= SOFT_FLUSH_CHARS:
+                breaks = list(SOFT_BREAK.finditer(self._buffer))
+                if breaks:
+                    cut = breaks[-1]
+                    head = self._buffer[: cut.start()].strip()
+                    self._buffer = self._buffer[cut.end() :]
+                    if head:
+                        out.append(head)
+                    continue
+            return out
+
+    async def _run_tool(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
+        started = time.perf_counter()
+        try:
+            result = await self.tools.dispatch(name, arguments)
+        except Exception as exc:  # a broken tool must not take the call with it
+            result = {"error": f"{type(exc).__name__}: {exc}"}
+            await self.session.record("error", {"where": f"tool:{name}", "detail": str(exc)})
+
+        elapsed = int((time.perf_counter() - started) * 1000)
+        await self.session.record("tool_call", {
+            "name": name,
+            "arguments": arguments,
+            "result": _clip(result),
+            "elapsed_ms": elapsed,
+        })
+        self.messages.append({
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": _as_json(result),
+        })
+
+    # ---- housekeeping -------------------------------------------------
+
+    async def brief_on_patient(self, patient: dict[str, Any], context: dict[str, Any]) -> None:
+        """Drop the chart into the conversation the moment it is opened."""
+        self.messages.append({"role": "system", "content": chart_briefing(patient, context)})
+
+    def note_interruption(self, spoken_so_far: str) -> None:
+        """Record only what the caller actually heard before cutting in."""
+        for message in reversed(self.messages):
+            if message.get("role") == "assistant" and message.get("content"):
+                message["content"] = spoken_so_far or message["content"]
+                break
+
+    def _trim(self) -> None:
+        if len(self.messages) <= MAX_HISTORY_MESSAGES:
+            return
+        head = [self.messages[0]]
+        tail = self.messages[-(MAX_HISTORY_MESSAGES - 1) :]
+        # Never start the kept window on an orphaned tool result.
+        while tail and tail[0].get("role") == "tool":
+            tail.pop(0)
+        self.messages = head + tail
+
+
+def _as_json(value: Any) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False, default=str)[:4000]
+
+
+def _clip(value: Any, limit: int = 1200) -> Any:
+    text = _as_json(value)
+    if len(text) <= limit:
+        return value
+    return {"truncated": True, "preview": text[:limit]}

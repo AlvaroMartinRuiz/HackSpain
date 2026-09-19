@@ -7,6 +7,39 @@
 ## Team docs
 
 - [PROSPER-TRACK.md](./PROSPER-TRACK.md) — guía de referencia del reto (API, scoring, problemas, setup)
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — cómo está construido y qué resuelve cada pieza
+- [RUNBOOK.md](./RUNBOOK.md) — arrancar, exponer con ngrok, depurar, y la demo para el jurado
+
+## Nuestra solución — El Turno
+
+Un servidor WebSocket que habla Twilio Media Streams, con una consola en vivo
+sobre el mismo puerto.
+
+```powershell
+.\.venv\Scripts\python -m pip install -r requirements.txt
+.\.venv\Scripts\python scripts\check_domain.py    # núcleo determinista
+.\.venv\Scripts\python scripts\check_engine.py    # contra la clínica real
+.\run.ps1
+```
+
+- Consola: <http://localhost:7860/>
+- Endpoint de llamadas: `ws://localhost:7860/ws` (`wss://` a través de ngrok)
+
+El principio de diseño: **el modelo conduce la conversación, el código decide el
+registro.** Ningún id, minuto, tipo de cita, póliza ni motivo de rechazo sale de
+lo que el modelo crea; todos salen de lo que devolvió la clínica. Está explicado
+en [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+### Herramientas
+
+| Script | Para qué |
+| --- | --- |
+| `scripts/check_domain.py` | Fechas, DNI, tipos de cita, cierres, triaje. Sin red, sin modelo |
+| `scripts/check_engine.py` | El motor contra la clínica real: huecos, reglas, rechazos |
+| `scripts/rehearse.py` | Escenarios con la forma de los problemas puntuados, en texto y sin cuota |
+| `scripts/mock_call.py` | Marca nuestro propio socket, N a la vez. El chequeo del problema 2 |
+| `scripts/fetch_catalog.py` | Cachea el catálogo de la clínica en `data/` |
+| `scripts/smoke_test.py` | Que la clave y el host responden |
 
 ## What we're building
 

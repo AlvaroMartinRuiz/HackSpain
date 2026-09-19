@@ -1,0 +1,173 @@
+"""What the console reads, and the live feed it watches."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any, Optional
+
+import uuid
+
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, Field
+
+from src.agent.llm import LLMClient
+from src.config import settings
+from src.domain.catalog import Catalog
+from src.obs.store import store
+from src.platform_api.client import PlatformClient
+from src.voice.tts import active_provider_name
+
+router = APIRouter(prefix="/api/console")
+
+_catalog: Optional[Catalog] = None
+_llm: Optional[LLMClient] = None
+
+
+def configure(catalog: Catalog, llm: LLMClient) -> None:
+    global _catalog, _llm
+    _catalog, _llm = catalog, llm
+
+
+@router.get("/overview")
+async def overview() -> dict[str, Any]:
+    missing = settings.missing_voice_keys()
+    return {
+        "clinic": _catalog.clinic_name if _catalog else None,
+        "endpoint": {"port": settings.port, "path": "/ws"},
+        "providers": {
+            "stt": settings.stt_provider if settings.deepgram_api_key else "whisper (fallback)",
+            "stt_model": settings.deepgram_model,
+            "llm": f"{settings.llm_provider}:{settings.llm_model}" if settings.llm_api_key else "not configured",
+            "tts": active_provider_name(),
+        },
+        "ready": not missing,
+        "missing_keys": missing,
+        "stats": store.aggregate(),
+        "live": [call.summary() for call in store.live_calls()],
+        "recent": [call.summary() for call in store.recent_calls()[:20]],
+    }
+
+
+@router.get("/calls/{call_id}")
+async def call_detail(call_id: str) -> dict[str, Any]:
+    call = store.get(call_id)
+    if call is not None:
+        return call.detail()
+    events = store.replay(call_id)
+    if not events:
+        raise HTTPException(status_code=404, detail="no such call")
+    return {"call_id": call_id, "replay_only": True, "events": events}
+
+
+@router.get("/calls/{call_id}/replay")
+async def call_replay(call_id: str) -> dict[str, Any]:
+    events = store.replay(call_id)
+    if not events:
+        raise HTTPException(status_code=404, detail="no such call")
+    return {"call_id": call_id, "events": events}
+
+
+@router.get("/history")
+async def history(limit: int = 50) -> dict[str, Any]:
+    return {"calls": store.history(limit)}
+
+
+@router.get("/clinic")
+async def clinic_records() -> dict[str, Any]:
+    if _catalog is None:
+        raise HTTPException(status_code=503, detail="catalogue not loaded")
+    return _catalog.summary()
+
+
+@router.get("/submissions")
+async def platform_submissions(limit: int = 25) -> dict[str, Any]:
+    client = PlatformClient()
+    try:
+        return {"submissions": await client.submissions(limit)}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        await client.aclose()
+
+
+class RehearsalRequest(BaseModel):
+    turns: list[str] = Field(..., description="What the caller says, one turn at a time.")
+    from_number: Optional[str] = Field(default=None, description="Caller id, or none to withhold it.")
+    dry_run: bool = Field(default=True, description="Keep the record local instead of posting it.")
+    label: Optional[str] = None
+
+
+@router.post("/rehearse")
+async def rehearse(request: RehearsalRequest) -> dict[str, Any]:
+    """Run a whole call as text: same brain, same tools, no audio and no quota.
+
+    This is the loop the agent is developed in. A practice call costs thirty
+    seconds of cooldown; this costs nothing and answers the same question —
+    did the right record come out.
+    """
+    if _catalog is None or _llm is None:
+        raise HTTPException(status_code=503, detail="not ready")
+
+    from src.telephony.session import CallSession
+
+    call_id = f"rehearsal-{uuid.uuid4()}"
+    store.open_call(call_id, request.from_number)
+    await store.announce({"type": "call_started", "call_id": call_id})
+
+    async def sink(_message: dict[str, Any]) -> None:
+        return None
+
+    session = CallSession(
+        call_id=call_id,
+        stream_sid=call_id,
+        from_number=request.from_number,
+        send=sink,
+        catalog=_catalog,
+        store=store,
+        llm=_llm,
+        text_mode=True,
+        dry_run=request.dry_run,
+    )
+
+    await session.record("call_started", {"rehearsal": True, "label": request.label,
+                                          "from_number": request.from_number})
+    await session.start()
+    for turn in request.turns:
+        await session.feed_text(turn)
+    await session.finalize(status="rehearsed")
+
+    call = store.get(call_id)
+    detail = call.detail() if call else {}
+    return {
+        "call_id": call_id,
+        "label": request.label,
+        "transcript": detail.get("transcript", []),
+        "decisions": detail.get("decisions", []),
+        "tool_calls": detail.get("tool_calls", []),
+        "clinic_calls": detail.get("clinic_calls", []),
+        "submissions": [
+            {"action": s["action"], "payload": s["payload"], "status": s.get("status")}
+            for s in detail.get("submissions", [])
+        ],
+        "errors": detail.get("errors", []),
+        "metrics": detail.get("metrics", {}),
+    }
+
+
+@router.websocket("/stream")
+async def stream(websocket: WebSocket) -> None:
+    await websocket.accept()
+    queue = store.subscribe()
+    try:
+        await websocket.send_json({"type": "hello", "overview": await overview()})
+        while True:
+            try:
+                message = await asyncio.wait_for(queue.get(), timeout=15.0)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping", "stats": store.aggregate()})
+                continue
+            await websocket.send_json(message)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        store.unsubscribe(queue)

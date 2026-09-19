@@ -1,14 +1,131 @@
+"""Runtime configuration, read once from the environment."""
+
+from __future__ import annotations
+
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT / "data"
 
-PROSPER_API_KEY = os.getenv("PLATFORM_API_KEY") or os.getenv("PROSPER_API_KEY", "")
-PROSPER_BASE_URL = (
-    os.getenv("PLATFORM_API_BASE_URL")
-    or os.getenv("PROSPER_BASE_URL")
-    or "https://voice.getprosperapp.com/api/v1"
-)
-PORT = int(os.getenv("PORT", "8000"))
+load_dotenv(ROOT / ".env")
+
+
+def _env(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value.strip()
+    return default
+
+
+def _int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, "") or default)
+    except ValueError:
+        return default
+
+
+def _float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, "") or default)
+    except ValueError:
+        return default
+
+
+def _bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+@dataclass(frozen=True)
+class Settings:
+    # Platform (clinic reads + submissions)
+    api_key: str = field(default_factory=lambda: _env("PLATFORM_API_KEY", "PROSPER_API_KEY"))
+    api_base_url: str = field(
+        default_factory=lambda: _env(
+            "PLATFORM_API_BASE_URL",
+            "PROSPER_BASE_URL",
+            default="https://hackspain.getprosperapp.com/api/v1",
+        ).rstrip("/")
+    )
+
+    # Server
+    port: int = field(default_factory=lambda: _int("PORT", 7860))
+    host: str = field(default_factory=lambda: _env("HOST", default="0.0.0.0"))
+
+    # Speech to text
+    stt_provider: str = field(default_factory=lambda: _env("STT_PROVIDER", default="deepgram").lower())
+    deepgram_api_key: str = field(default_factory=lambda: _env("DEEPGRAM_API_KEY"))
+    deepgram_model: str = field(default_factory=lambda: _env("DEEPGRAM_MODEL", default="nova-3"))
+    deepgram_language: str = field(default_factory=lambda: _env("DEEPGRAM_LANGUAGE", default="multi"))
+    stt_endpointing_ms: int = field(default_factory=lambda: _int("STT_ENDPOINTING_MS", 300))
+    stt_utterance_end_ms: int = field(default_factory=lambda: _int("STT_UTTERANCE_END_MS", 1000))
+
+    # Language model
+    llm_provider: str = field(default_factory=lambda: _env("LLM_PROVIDER", default="openai").lower())
+    llm_api_key: str = field(default_factory=lambda: _env("LLM_API_KEY", "OPENAI_API_KEY"))
+    llm_base_url: str = field(
+        default_factory=lambda: _env("LLM_BASE_URL", default="https://api.openai.com/v1").rstrip("/")
+    )
+    llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", default="gpt-4o"))
+    llm_temperature: float = field(default_factory=lambda: _float("LLM_TEMPERATURE", 0.2))
+    llm_max_tool_rounds: int = field(default_factory=lambda: _int("LLM_MAX_TOOL_ROUNDS", 6))
+
+    # Text to speech
+    tts_provider: str = field(default_factory=lambda: _env("TTS_PROVIDER", default="elevenlabs").lower())
+    elevenlabs_api_key: str = field(default_factory=lambda: _env("ELEVENLABS_API_KEY"))
+    elevenlabs_voice_id: str = field(
+        default_factory=lambda: _env("ELEVENLABS_VOICE_ID", default="EXAVITQu4vr4xnSDxMaL")
+    )
+    elevenlabs_model: str = field(
+        default_factory=lambda: _env("ELEVENLABS_MODEL", default="eleven_flash_v2_5")
+    )
+    cartesia_api_key: str = field(default_factory=lambda: _env("CARTESIA_API_KEY"))
+    cartesia_voice_id: str = field(default_factory=lambda: _env("CARTESIA_VOICE_ID"))
+    cartesia_model: str = field(default_factory=lambda: _env("CARTESIA_MODEL", default="sonic-2"))
+    openai_tts_voice: str = field(default_factory=lambda: _env("OPENAI_TTS_VOICE", default="alloy"))
+    openai_tts_model: str = field(default_factory=lambda: _env("OPENAI_TTS_MODEL", default="gpt-4o-mini-tts"))
+
+    # Call behaviour
+    call_hard_limit_s: float = field(default_factory=lambda: _float("CALL_HARD_LIMIT_S", 170.0))
+    submit_deadline_s: float = field(default_factory=lambda: _float("SUBMIT_DEADLINE_S", 25.0))
+    greeting: str = field(
+        default_factory=lambda: _env(
+            "AGENT_GREETING",
+            default="Clínica Arenal, buenos días. ¿En qué puedo ayudarle?",
+        )
+    )
+    barge_in: bool = field(default_factory=lambda: _bool("BARGE_IN", True))
+
+    # Observability
+    db_path: str = field(default_factory=lambda: _env("DB_PATH", default=str(DATA_DIR / "calls.db")))
+    catalog_path: str = field(
+        default_factory=lambda: _env("CATALOG_PATH", default=str(DATA_DIR / "catalog.json"))
+    )
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.api_key and self.api_base_url)
+
+    def missing_voice_keys(self) -> list[str]:
+        missing: list[str] = []
+        if self.stt_provider == "deepgram" and not self.deepgram_api_key:
+            missing.append("DEEPGRAM_API_KEY")
+        if not self.llm_api_key:
+            missing.append("LLM_API_KEY")
+        if self.tts_provider == "elevenlabs" and not self.elevenlabs_api_key:
+            missing.append("ELEVENLABS_API_KEY")
+        if self.tts_provider == "cartesia" and not self.cartesia_api_key:
+            missing.append("CARTESIA_API_KEY")
+        if self.tts_provider == "openai" and not self.llm_api_key:
+            missing.append("LLM_API_KEY (openai tts)")
+        return missing
+
+
+settings = Settings()
