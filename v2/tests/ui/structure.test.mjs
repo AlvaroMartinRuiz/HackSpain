@@ -45,9 +45,13 @@ test('HTML loads only v2-owned local code/assets and offers responsive accessibl
   assert.match(css, /\[hidden\] \{ display: none !important; \}/);
 });
 
-test('both natural interaction modes are explicitly paid and live mode cannot be selected', () => {
-  assert.match(html, /Start text · paid/); assert.match(html, /Start microphone · paid/);
-  assert.match(html, /id="paid-consent"/); assert.match(html, /Run free fixture/);
+test('calling is one click with automatic language; diagnostics and live submission stay separate', () => {
+  assert.match(html, /id="start-voice"[^>]*>Call<\/button>/);
+  assert.doesNotMatch(html + app, /paid-consent|Start microphone · paid/);
+  assert.match(html, /<details id="call-options" hidden>/); assert.match(html, /Offline fixture language/);
+  assert.match(html, /Run free fixture/);
+  const startVoice = app.slice(app.indexOf('async function startVoice('), app.indexOf('async function endSession('));
+  assert.match(startVoice, /language: 'auto'/); assert.doesNotMatch(startVoice, /el\('language'\)/);
   assert.match(html, /value="es"/); assert.match(html, /value="en"/); assert.match(html, /value="ca"/);
   assert.doesNotMatch(html, /<option value="live"/);
   assert.match(html, /Official score/); assert.match(html, /Unknown/);

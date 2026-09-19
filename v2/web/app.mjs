@@ -14,11 +14,20 @@ const api = new OperatorAPI(globalThis.fetch.bind(globalThis), () => {
   clearWorkspace(); notice('Operator authentication was rejected. Unlock again with a valid token.', true);
 });
 const recordings = new RecordingCache(api);
-const voice = new BrowserVoice(api, {
+const voiceAPI = {request(path, options) {
+  if (path !== '/api/voice/ticket') throw new ApiError(0, 'Unexpected caller request.');
+  return api.authenticated ? api.request(path, options)
+    : api.request('/api/public/voice/ticket', {...options, body: {}, publicRequest: true});
+}};
+const voice = new BrowserVoice(voiceAPI, {
   onStatus: message => { el('session-status').textContent = message; },
+  onLevel: value => { el('microphone-level').value = value; },
+  onMuteChange: () => controls(),
   onReady: runId => {
     if (session?.kind !== 'voice') return;
-    session.runId = runId; lastSessionRun = runId; controls(); refreshAuthenticated();
+    session.runId = runId; lastSessionRun = api.authenticated ? runId : null;
+    if (!api.authenticated) el('talk-transcript').replaceChildren(node('p', 'Connected. Speak naturally and listen to the agent through your speakers or headphones.', 'empty'));
+    controls(); refreshAuthenticated();
   },
   onStopped: message => {
     if (session?.kind !== 'voice') return;
@@ -36,16 +45,32 @@ function date(value) { if (!value) return 'Time unknown'; const d = new Date(val
 function badge(text, cls = '') { return node('span', text, `pill ${cls}`); }
 function metricRow(label, value) { const row = node('div', ''); row.append(node('dt', label), node('dd', value)); return row; }
 function controls() {
-  const unlocked = api.authenticated, active = Boolean(session);
-  const paid = unlocked && el('paid-consent').checked && !active && !fixtureBusy;
-  el('logout').hidden = !unlocked; el('auth-panel').hidden = unlocked;
-  el('start-text').disabled = !paid; el('start-voice').disabled = !paid || health?.voice_ready === false;
+  const unlocked = api.authenticated, active = Boolean(session), voiceSession = session?.kind === 'voice';
+  const voiceActive = voiceSession && voice.phase === 'active';
+  const voiceState = voiceActive ? voice.muted ? 'Microphone muted' : 'Microphone live' : 'Connecting microphone';
+  const canStart = unlocked && !active && !fixtureBusy;
+  const voiceReady = unlocked ? health?.voice_ready === true : health?.public_voice_ready === true;
+  el('logout').hidden = !unlocked;
+  el('auth-panel').hidden = unlocked || !['overview', 'runs'].includes(location.hash.slice(1));
+  el('operator-login').hidden = unlocked;
+  for (const link of document.querySelectorAll('[data-operator-nav]')) link.hidden = !unlocked;
+  el('call-options').hidden = !unlocked; el('inspect-session').hidden = !unlocked;
+  el('start-text').disabled = !canStart || health?.text_ready !== true;
+  el('start-voice').disabled = active || fixtureBusy || !voiceReady;
   el('stop-session').disabled = !active || session?.ending;
   el('global-stop').hidden = !active; el('global-stop').disabled = Boolean(session?.ending);
   el('active-session').hidden = !active;
-  el('active-session').textContent = active ? session.kind === 'voice' ? voice.phase === 'active' ? 'Microphone live · paid' : 'Connecting microphone' : 'Text session · paid' : '';
+  el('active-session').textContent = active ? voiceSession ? voiceState : 'Text chat' : '';
+  el('voice-controls').hidden = !voiceSession; el('turn-form').hidden = session?.kind !== 'text';
+  el('microphone-state').textContent = voiceState;
+  el('mute-voice').disabled = !voiceActive;
+  el('mute-voice').textContent = voice.muted ? 'Unmute microphone' : 'Mute microphone';
+  el('mute-voice').setAttribute('aria-pressed', String(voice.muted));
+  el('voice-access').textContent = active ? 'Your conversation is active. Hang up when you are finished.'
+    : !health ? 'Connecting to the server…'
+    : !voiceReady ? 'Calling is temporarily unavailable. Please try again later.'
+    : 'Ready. Press Call and allow microphone access.';
   el('language').disabled = active || fixtureBusy; el('mode').disabled = active;
-  el('paid-consent').disabled = active;
   el('fixture').disabled = !unlocked || active || fixtureBusy;
   const canType = unlocked && session?.kind === 'text' && Boolean(session.runId) && !session.busy && !session.ending;
   el('turn').disabled = !canType; el('send-turn').disabled = !canType;
@@ -58,19 +83,20 @@ function clearWorkspace() {
   selected = null; history.clear(); reports.clear(); fixtureBusy = false; moreBusy = false;
   releaseRecordings(); recordings.clear(); el('run-detail').hidden = true;
   for (const id of ['transcript', 'detail-stats', 'trace', 'evidence-actions', 'evidence-errors', 'evidence-timings', 'evidence-grades', 'detail-title', 'detail-meta', 'transcript-count']) el(id).replaceChildren();
-  el('turn').value = ''; el('token').value = ''; el('paid-consent').checked = false;
-  el('talk-transcript').replaceChildren(node('p', 'Unlock to begin a new conversation.', 'empty'));
+  el('turn').value = ''; el('token').value = '';
+  el('talk-transcript').replaceChildren(node('p', 'Press Call to talk to the agent.', 'empty'));
   delete el('talk-transcript').dataset.signature; delete el('transcript').dataset.signature;
-  el('session-status').textContent = 'No active session. Workspace locked.';
+  el('session-status').textContent = 'No active call.';
   el('fixture-status').textContent = ''; renderBudget(null); renderHistory(); controls();
   el('poll-status').textContent = 'Unlock to load history.';
 }
 function route() {
-  const page = ['overview', 'runs', 'talk'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
+  const page = ['overview', 'runs', 'talk'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'talk';
   for (const name of ['overview', 'runs', 'talk']) el(`view-${name}`).hidden = page !== name;
   for (const a of document.querySelectorAll('.nav a')) {
     if (a.hash === `#${page}`) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   }
+  controls();
 }
 async function refreshHealth() {
   try {
@@ -107,7 +133,7 @@ function renderHistory() {
   const all = history.list(), filtered = all.filter(run => matchesFilter(run, el('run-filter').value));
   el('run-count').textContent = api.authenticated ? String(all.length) : '—';
   el('history-empty').hidden = filtered.length > 0;
-  el('history-empty').textContent = !api.authenticated ? 'Unlock to load actual stored runs.' : all.length ? 'No loaded runs match this filter.' : 'No stored runs yet. Try the free fixture in Rehearse.';
+  el('history-empty').textContent = !api.authenticated ? 'Unlock to load actual stored runs.' : all.length ? 'No loaded runs match this filter.' : 'No stored runs yet. Try the free fixture in Talk to agent.';
   el('runs-body').replaceChildren(...filtered.map(run => {
     const m = run.metrics || {}, tr = node('tr', ''); if (selected === run.run_id) tr.className = 'selected';
     const id = node('td', ''); id.append(runButton(run), node('small', date(run.created_at)));
@@ -233,16 +259,16 @@ function renderDetail(report) {
   el('trace').textContent = pretty(report);
 }
 async function startText() {
-  if (session || !api.authenticated || !el('paid-consent').checked) return;
+  if (session || !api.authenticated || fixtureBusy) return;
   const epoch = ++sessionEpoch, generation = api.generation;
   session = {kind: 'text', runId: null, busy: true}; lastSessionRun = null; notice(); controls();
-  el('session-status').textContent = 'Starting paid text session…';
+  el('session-status').textContent = 'Starting chat…';
   el('talk-transcript').replaceChildren(node('p', 'Waiting for the model…', 'empty')); delete el('talk-transcript').dataset.signature;
   try {
-    const result = await api.request('/api/sessions/text', {method: 'POST', body: {language: el('language').value, mode: el('mode').value}, timeout: 60000});
+    const result = await api.request('/api/sessions/text', {method: 'POST', body: {language: 'auto', mode: el('mode').value}, timeout: 60000});
     if (epoch !== sessionEpoch || generation !== api.generation) return;
     const report = acceptReport(result); session.runId = report.run_id; lastSessionRun = report.run_id; session.busy = false;
-    renderSessionReport(result); el('session-status').textContent = 'Paid text session active. Type your next message.';
+    renderSessionReport(result); el('session-status').textContent = 'Chat connected. Type your next message.';
   } catch (error) { if (epoch === sessionEpoch) { session = null; el('session-status').textContent = 'Session start failed. Check history before retrying; a timed-out request may still have spent quota.'; reportError(error); } }
   controls(); refreshAuthenticated();
 }
@@ -253,10 +279,10 @@ function renderSessionReport(report) {
   }
 }
 async function startVoice() {
-  if (session || !api.authenticated || !el('paid-consent').checked) return;
+  if (session || fixtureBusy || (!api.authenticated && health?.public_voice_ready !== true)) return;
   session = {kind: 'voice', runId: null}; lastSessionRun = null; ++sessionEpoch; notice(); controls();
-  el('talk-transcript').replaceChildren(node('p', 'Connecting microphone. Transcript arrives from the actual run via polling.', 'empty')); delete el('talk-transcript').dataset.signature;
-  try { await voice.start({language: el('language').value, mode: el('mode').value}); }
+  el('talk-transcript').replaceChildren(node('p', 'Connecting your microphone…', 'empty')); delete el('talk-transcript').dataset.signature;
+  try { await voice.start({language: 'auto', mode: api.authenticated ? el('mode').value : 'practice'}); }
   catch (error) { reportError(error); }
   controls();
 }
@@ -297,9 +323,9 @@ el('load-more').addEventListener('click', async () => {
   catch (error) { if (generation === api.generation) reportError(error); }
   finally { moreBusy = false; controls(); }
 });
-el('paid-consent').addEventListener('change', controls);
 el('start-text').addEventListener('click', startText);
 el('start-voice').addEventListener('click', startVoice);
+el('mute-voice').addEventListener('click', () => voice.setMuted(!voice.muted));
 el('stop-session').addEventListener('click', endSession);
 el('global-stop').addEventListener('click', endSession);
 el('inspect-session').addEventListener('click', () => selectRun(lastSessionRun));
@@ -307,7 +333,7 @@ el('turn-form').addEventListener('submit', async event => {
   event.preventDefault(); const text = el('turn').value.trim();
   if (!text || session?.kind !== 'text' || !session.runId || session.busy || session.ending) return;
   const active = session, epoch = sessionEpoch; active.busy = true; controls(); notice();
-  el('session-status').textContent = 'Waiting for the model · paid turn…';
+  el('session-status').textContent = 'Waiting for the agent…';
   try {
     const result = await api.request(`/api/sessions/${encodeURIComponent(active.runId)}/turn`, {method: 'POST', body: {text}, timeout: 60000});
     if (epoch !== sessionEpoch) return;

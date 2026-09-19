@@ -18,6 +18,9 @@ class Config:
     port: int = field(default_factory=lambda: int(os.getenv("V2_PORT", "7861")))
     mode: str = field(default_factory=lambda: os.getenv("V2_MODE", "simulation"))
     allow_paid: bool = field(default_factory=lambda: os.getenv("V2_ENABLE_PAID", "false").lower() == "true")
+    public_browser_calls: bool = field(default_factory=lambda: os.getenv("V2_PUBLIC_BROWSER_CALLS", "false").lower() == "true")
+    public_operator_tools: bool = field(default_factory=lambda: os.getenv("V2_PUBLIC_OPERATOR_TOOLS", "false").lower() == "true")
+    public_carrier_calls: bool = field(default_factory=lambda: os.getenv("V2_PUBLIC_CARRIER_CALLS", "false").lower() == "true")
     allow_submissions: bool = field(default_factory=lambda: os.getenv("V2_ALLOW_SUBMISSIONS", "false").lower() == "true")
     operator_token: str = field(default_factory=lambda: os.getenv("V2_OPERATOR_TOKEN") or os.getenv("CONSOLE_TOKEN", ""), repr=False)
     gateway_key: str = field(default_factory=lambda: os.getenv("AI_GATEWAY_API_KEY", ""), repr=False)
@@ -70,13 +73,14 @@ class Config:
             raise ValueError("invalid session limits")
 
     def missing_text(self) -> list[str]:
-        required = {"V2_ENABLE_PAID": self.allow_paid, "V2_OPERATOR_TOKEN": self.operator_token,
+        required = {"V2_ENABLE_PAID": self.allow_paid, "V2_OPERATOR_TOKEN": self.operator_token or self.public_operator_tools,
                     "AI_GATEWAY_API_KEY": self.gateway_key}
         return [name for name, value in required.items() if not value]
 
     def missing_voice(self) -> list[str]:
         required = {
-            "V2_ENABLE_PAID": self.allow_paid, "V2_OPERATOR_TOKEN": self.operator_token,
+            "V2_ENABLE_PAID": self.allow_paid,
+            "V2_OPERATOR_TOKEN": self.operator_token or self.public_operator_tools or self.public_browser_calls or self.public_carrier_calls,
             "AI_GATEWAY_API_KEY": self.gateway_key, "DEEPGRAM_API_KEY": self.deepgram_key,
             "CARTESIA_API_KEY": self.cartesia_key, "ELEVENLABS_API_KEY": self.elevenlabs_key,
             "V2_CARTESIA_VOICE_ES": self.voice_es, "V2_CARTESIA_VOICE_EN": self.voice_en,

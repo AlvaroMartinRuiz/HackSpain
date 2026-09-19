@@ -29,7 +29,7 @@ bash run.sh
 
 Both run `python -m v2`. The default port is 7861. `GET /health` reports missing configuration without exposing values; configured keys alone do not prove provider acceptance.
 
-Open `http://127.0.0.1:7861/`. Enter the operator token in the dashboard. Protected HTTP endpoints and the carrier `/ws` use `X-V2-Token`. Do not put long-lived tokens in query strings.
+Open `http://127.0.0.1:7861/`. With `V2_PUBLIC_BROWSER_CALLS=true`, the caller page needs no operator token: press Call and allow microphone access. Public calls are read-only practice, limited to one at a time, and use the existing paid-provider budget. Operator tools, private HTTP endpoints and the carrier `/ws` still require `X-V2-Token`; use Operator tools to unlock private history and recordings. Do not put long-lived tokens in query strings.
 
 The current delivery does not authorize deployment or replacement of an existing remote endpoint. A carrier integration must send the configured authentication header and use mono 8 kHz mu-law Twilio messages. Live carrier mode is gated by both `V2_ALLOW_SUBMISSIONS=true` and `V2_RELEASE_APPROVED=true`; set neither until acceptance tests and explicit release approval are complete. Browser and text sessions can select only simulation or read-only practice, even when the carrier is live.
 

@@ -24,7 +24,7 @@ class APITests(unittest.TestCase):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
         self.config = Config(operator_token="test-operator", allow_paid=False, mode="simulation",
-                             data_dir=Path(self.folder.name))
+                             data_dir=Path(self.folder.name), public_operator_tools=False, public_carrier_calls=False)
         self.headers = {"X-V2-Token": "test-operator"}
 
     def test_rehearsal_http_path_is_offline_and_exposes_separate_metrics(self):

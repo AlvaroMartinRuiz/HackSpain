@@ -39,8 +39,12 @@ class SafePlatformClient(PlatformClient):
 
 class SessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    language: Language = "en"
+    language: Language | Literal["auto"] = "auto"
     mode: Literal["simulation", "practice"] = "simulation"
+
+
+class PublicCallRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 class TextTurnRequest(BaseModel):
@@ -65,6 +69,7 @@ class VoiceTicket:
     mode: str
     origin: str
     expires_at: float
+    public_peer: str | None = None
 
 
 def create_app(config: Config | None = None, store: RunStore | None = None) -> FastAPI:
@@ -104,6 +109,10 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
         app.state.voice_active = set()
         app.state.text_sessions = {}
         app.state.voice_tickets = {}
+        app.state.public_voice_slot = asyncio.Semaphore(1)
+        app.state.public_ticket_times = {}
+        app.state.operator_request_times = {}
+        app.state.carrier_connect_times = {}
         expiry = asyncio.create_task(expire_sessions())
         try:
             yield
@@ -200,6 +209,8 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
     async def health():
         return {"status": "ok", "mode": config.mode, "live_cutover_enabled": config.mode == "live",
                 "voice_ready": not config.missing_voice(), "text_ready": not config.missing_text(),
+                "public_voice_enabled": config.public_browser_calls,
+                "public_voice_ready": config.public_browser_calls and not config.missing_voice() and bool(config.api_key),
                 "clinic_ready": bool(config.api_key), "assessment_ready": bool(config.allow_paid and config.jev_url and config.jev_token),
                 "missing": config.missing_voice(), "readiness_source": "configuration_only",
                 "languages": ["es", "en", "ca"], "voice_clone": "not_enabled",
@@ -247,7 +258,8 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
         require_paid(mode=request.mode)
         if len(app.state.text_sessions) >= config.max_text_sessions:
             raise HTTPException(429, "text session capacity reached; close an existing session")
-        controller, clinic, interpreter = await controller_for("text-" + uuid4().hex, request.language, request.mode, "text")
+        language = config.default_language if request.language == "auto" else request.language
+        controller, clinic, interpreter = await controller_for("text-" + uuid4().hex, language, request.mode, "text")
         state = controller.state
         session = TextSession(controller, clinic, interpreter, time.monotonic())
         app.state.text_sessions[state.run_id] = session
@@ -299,22 +311,47 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
         scheme = "https" if connection.url.scheme in {"https", "wss"} else "http"
         return origin == f"{scheme}://{same_origin}" or origin in config.allowed_origins
 
-    @app.post("/api/voice/ticket", dependencies=[Depends(authenticated)])
-    async def voice_ticket(fields: SessionRequest, request: Request):
+    def issue_voice_ticket(fields: SessionRequest, request: Request, public_peer: str | None = None):
         origin = request.headers.get("origin") or str(request.base_url).rstrip("/")
         if not origin_allowed(origin, request):
             raise HTTPException(403, "browser origin is not allowed")
         require_paid(voice=True, mode=fields.mode)
         now = time.monotonic()
-        app.state.voice_tickets = {key: value for key, value in app.state.voice_tickets.items() if value.expires_at > now}
-        if len(app.state.voice_tickets) >= 100 or app.state.voice_slot.locked():
+        tickets = {key: value for key, value in app.state.voice_tickets.items()
+                   if value.expires_at > now and (public_peer is None or value.public_peer != public_peer)}
+        if len(tickets) >= 100 or app.state.voice_slot.locked():
             raise HTTPException(429, "voice capacity reached")
+        if public_peer is not None:
+            if app.state.public_voice_slot.locked() or sum(value.public_peer is not None for value in tickets.values()) >= 4:
+                raise HTTPException(429, "public calling is busy")
+            app.state.public_ticket_times = {peer: [stamp for stamp in stamps if stamp > now - 60]
+                                             for peer, stamps in app.state.public_ticket_times.items()
+                                             if stamps and stamps[-1] > now - 60}
+            attempts = app.state.public_ticket_times.get(public_peer, [])
+            if len(attempts) >= 6 or (public_peer not in app.state.public_ticket_times and len(app.state.public_ticket_times) >= 1024):
+                raise HTTPException(429, "public call request limit reached")
+            app.state.public_ticket_times[public_peer] = [*attempts, now]
         token = secrets.token_urlsafe(32)
-        ticket = VoiceTicket("browser-" + uuid4().hex, "MZ" + uuid4().hex, fields.language,
-                             fields.mode, origin, now + config.ticket_ttl_s)
-        app.state.voice_tickets[hashlib.sha256(token.encode()).hexdigest()] = ticket
+        language = config.default_language if fields.language == "auto" else fields.language
+        ticket = VoiceTicket("browser-" + uuid4().hex, "MZ" + uuid4().hex, language,
+                             fields.mode, origin, now + config.ticket_ttl_s, public_peer)
+        tickets[hashlib.sha256(token.encode()).hexdigest()] = ticket
+        app.state.voice_tickets = tickets
         return {"ticket": token, "expires_in": config.ticket_ttl_s, "websocket_path": "/ws/browser",
                 "call_id": ticket.call_id, "stream_sid": ticket.stream_sid}
+
+    @app.post("/api/voice/ticket", dependencies=[Depends(authenticated)])
+    async def voice_ticket(fields: SessionRequest, request: Request):
+        return issue_voice_ticket(fields, request)
+
+    @app.post("/api/public/voice/ticket")
+    async def public_voice_ticket(_fields: PublicCallRequest, request: Request):
+        if not config.public_browser_calls:
+            raise HTTPException(403, "public calling is disabled")
+        if not request.headers.get("origin"):
+            raise HTTPException(403, "browser origin is required")
+        peer = hashlib.sha256((request.client.host if request.client else "unknown").encode()).hexdigest()
+        return issue_voice_ticket(SessionRequest(mode="practice"), request, peer)
 
     async def handshake(socket: WebSocket, ticket: VoiceTicket | None):
         async def message():
@@ -360,10 +397,11 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
             try:
                 call_id, stream_sid = await handshake(socket, ticket)
                 language = ticket.language if ticket else config.default_language
-                controller, clinic, interpreter = await controller_for(call_id, language, mode, "browser" if ticket else "carrier")
+                transport = "public_browser" if ticket and ticket.public_peer is not None else "browser" if ticket else "carrier"
+                controller, clinic, interpreter = await controller_for(call_id, language, mode, transport)
                 state = controller.state
                 app.state.voice_active.add(state.run_id)
-                app.state.store.event(state.run_id, "call_started", {"status": "active", "transport": "browser" if ticket else "carrier"})
+                app.state.store.event(state.run_id, "call_started", {"status": "active", "transport": transport})
                 if ticket:
                     await socket.send_json({"event": "ready", "run_id": state.run_id})
                 from v2.voice import run_voice
@@ -425,7 +463,13 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
             await socket.close(code=1008)
             return
         app.state.voice_tickets.pop(key)
-        await serve_voice(socket, ticket)
+        if ticket.public_peer is None:
+            await serve_voice(socket, ticket)
+        elif app.state.public_voice_slot.locked():
+            await socket.close(code=1013)
+        else:
+            async with app.state.public_voice_slot:
+                await serve_voice(socket, ticket)
 
     return app
 

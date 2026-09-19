@@ -98,17 +98,27 @@ function microphoneMessage(error) {
 }
 export class BrowserVoice {
   constructor(api, callbacks = {}, environment = globalThis) {
-    this.api = api; this.callbacks = callbacks; this.env = environment; this.generation = 0; this.phase = 'idle';
+    this.api = api; this.callbacks = callbacks; this.env = environment; this.generation = 0; this.phase = 'idle'; this.muted = false;
   }
   status(message) { this.callbacks.onStatus?.(message); }
-  async start({language, mode}) {
+  setMuted(muted) {
+    if (this.phase !== 'active' || this.muted === Boolean(muted)) return;
+    this.muted = Boolean(muted);
+    for (const track of this.stream.getTracks()) track.enabled = !this.muted;
+    this.framer = new MuLawFramer(this.context.sampleRate);
+    this.callbacks.onLevel?.(0); this.callbacks.onMuteChange?.(this.muted);
+    this.status(this.muted ? 'Microphone muted · you can still hear the agent.' : 'Connected. Speak naturally; End call releases the microphone.');
+  }
+  async start({language = 'auto', mode = 'practice'} = {}) {
     if (this.phase !== 'idle') throw new ApiError(409, 'A browser call is already starting or active.');
-    if (!['en', 'es', 'ca'].includes(language) || !['simulation', 'practice'].includes(mode)) throw new ApiError(0, 'Invalid voice language or environment.');
+    if (!['auto', 'en', 'es', 'ca'].includes(language) || !['simulation', 'practice'].includes(mode)) throw new ApiError(0, 'Invalid voice language or environment.');
     const env = this.env, generation = ++this.generation;
     const alive = () => generation === this.generation;
     this.phase = 'starting'; this.status('Requesting microphone permission…');
     try {
       if (!env.isSecureContext || !env.navigator?.mediaDevices?.getUserMedia) throw new ApiError(0, 'Microphone calls need localhost or HTTPS and a browser with microphone support.');
+      const policy = env.document?.permissionsPolicy || env.document?.featurePolicy;
+      if (policy?.allowsFeature && !policy.allowsFeature('microphone')) throw new ApiError(0, 'Microphone access is blocked by the page permissions policy. Open this dashboard directly in a browser tab and check the server configuration.');
       const AudioContext = env.AudioContext || env.webkitAudioContext;
       if (!AudioContext) throw new ApiError(0, 'Web Audio is unavailable in this browser. Try a current Chrome, Edge, Firefox or Safari.');
       const context = new AudioContext(); this.context = context;
@@ -124,7 +134,7 @@ export class BrowserVoice {
       await this.prepareCapture(context, stream, generation);
       if (!alive()) return;
       for (const track of stream.getTracks()) track.onended = () => { if (alive()) this.stop('Microphone disconnected. Call stopped.'); };
-      this.status('Requesting a single-use voice ticket · paid providers…');
+      this.status('Connecting to the agent…');
       const ticket = await this.api.request('/api/voice/ticket', {method: 'POST', body: {language, mode}});
       if (!alive()) return;
       if (!ticket || typeof ticket.ticket !== 'string' || !/^[A-Za-z0-9._~-]+$/.test(ticket.ticket) ||
@@ -149,7 +159,7 @@ export class BrowserVoice {
               if (this.phase === 'active') return;
               if (!validRunId(message.run_id)) throw new ApiError(0, 'Voice session has no valid run identifier.');
               clearTimeout(this.readyTimer); this.connectReject = null; this.phase = 'active';
-              this.status('Microphone live · paid call. Speak naturally; End session releases all audio.');
+              this.status('Connected. Speak naturally; End call releases the microphone.');
               this.callbacks.onReady?.(message.run_id); resolve();
             } else if (message.event === 'media' && this.phase === 'active') {
               this.playback.enqueue(base64ToSamples(message.media?.payload));
@@ -191,6 +201,9 @@ export class BrowserVoice {
       if (!alive() || this.phase !== 'active' || this.socket?.readyState !== 1) return;
       if (context.state !== 'running') { this.stop('Browser audio was suspended. Restart the call with the page in the foreground.'); return; }
       try {
+        if (this.muted) samples = new Float32Array(samples.length);
+        const energy = samples.reduce((sum, value) => sum + (Number.isFinite(value) ? value * value : 0), 0);
+        this.callbacks.onLevel?.(Math.min(1, Math.sqrt(energy / Math.max(1, samples.length))));
         for (const bytes of this.framer.push(samples)) {
           if (!alive() || this.socket?.readyState !== 1) return;
           if (this.socket.bufferedAmount > 64000) { this.stop('The network cannot keep up with microphone audio. Call stopped; check connectivity.'); return; }
@@ -236,7 +249,8 @@ export class BrowserVoice {
     if (this.stream) { for (const track of this.stream.getTracks()) { track.onended = null; track.stop(); } this.stream = null; }
     const context = this.context; this.context = null;
     if (context) { context.onstatechange = null; if (context.state !== 'closed') context.close().catch(() => {}); }
-    this.framer = null; this.callId = this.streamSid = null;
+    this.framer = null; this.callId = this.streamSid = null; this.muted = false;
+    this.callbacks.onLevel?.(0); this.callbacks.onMuteChange?.(false);
     this.callbacks.onStopped?.(message);
   }
 }

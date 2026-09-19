@@ -137,6 +137,16 @@ test('mocked browser call authenticates via ticket, waits for ready, captures fr
   h.voice.stop(); assert.equal(h.tracks[0].stopped, 1);
 });
 
+test('a call defaults to automatic language without a manual language choice', async () => {
+  const h = harness(), starting = h.voice.start({mode: 'simulation'});
+  starting.catch(() => {});
+  await tick();
+  assert.equal(h.requests.length, 1);
+  assert.deepEqual(h.requests[0].options.body, {language: 'auto', mode: 'simulation'});
+  const socket = h.sockets[0]; socket.open(); socket.message({event: 'ready', run_id: 'mock-run'});
+  await starting; h.voice.stop();
+});
+
 test('preferred AudioWorklet capture uses zero-gain output and closes its port on stop', async () => {
   const h = harness({worklet: true}); const socket = await connect(h);
   assert.equal(h.voice.silent.gain.value, 0);
@@ -194,3 +204,42 @@ test('insecure origins reject microphone before any paid request', async () => {
   const h = harness(); h.env.isSecureContext = false;
   await assert.rejects(h.voice.start({language: 'es', mode: 'simulation'}), /localhost or HTTPS/); assert.equal(h.requests.length, 0);
 });
+
+for (const worklet of [false, true]) {
+  test(`mute preserves playback and sends silence without buffered microphone leakage (${worklet ? 'worklet' : 'fallback'})`, async () => {
+    const h = harness({worklet}), levels = [], muted = [];
+    h.voice.callbacks.onLevel = level => levels.push(level);
+    h.voice.callbacks.onMuteChange = value => muted.push(value);
+    const socket = await connect(h);
+    const input = samples => worklet ? h.voice.processor.port.onmessage({data: samples}) : capture(h.voice, samples);
+    input(new Float32Array(2048).fill(.25));
+    assert.equal(levels.at(-1), .25);
+    assert.ok(socket.sent.some(message => message.event === 'media' && [...atob(message.media.payload)].some(value => value.charCodeAt(0) !== 0xff)));
+    h.voice.setMuted(true);
+    assert.equal(h.voice.muted, true); assert.equal(h.tracks[0].enabled, false); assert.equal(levels.at(-1), 0);
+    const before = socket.sent.length;
+    input(new Float32Array(2048).fill(.8));
+    const silence = socket.sent.slice(before).filter(message => message.event === 'media');
+    assert.ok(silence.length > 0);
+    assert.ok(silence.every(message => [...atob(message.media.payload)].every(value => value.charCodeAt(0) === 0xff)));
+    assert.equal(levels.at(-1), 0);
+    socket.message({event: 'media', media: {payload: bytesToBase64(new Uint8Array(160).fill(0x80))}});
+    assert.equal(h.voice.playback.sources.size, 1);
+    h.voice.setMuted(false);
+    assert.equal(h.tracks[0].enabled, true);
+    input(new Float32Array(2048).fill(.5));
+    assert.equal(levels.at(-1), .5);
+    assert.deepEqual(muted.slice(-2), [true, false]);
+    h.voice.stop();
+    assert.equal(levels.at(-1), 0); assert.equal(h.voice.muted, false); assert.equal(h.tracks[0].stopped, 1);
+  });
+}
+
+for (const name of ['permissionsPolicy', 'featurePolicy']) {
+  test(`${name} blocks microphone before opening devices or requesting paid access`, async () => {
+    const h = harness();
+    h.env.document = {[name]: {allowsFeature: feature => feature !== 'microphone'}};
+    await assert.rejects(h.voice.start({language: 'es', mode: 'simulation'}), /permissions policy/);
+    assert.equal(h.contexts.length, 0); assert.equal(h.requests.length, 0); assert.equal(h.voice.phase, 'idle');
+  });
+}

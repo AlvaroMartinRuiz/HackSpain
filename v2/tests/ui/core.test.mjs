@@ -21,6 +21,60 @@ test('operator credential exists only in an authenticated request header; health
   await assert.rejects(api.request('/api/budget'), {status: 401});
 });
 
+test('explicit public operator access needs no token and sends no credential header', async () => {
+  const seen = [], api = new OperatorAPI(async (_path, options) => { seen.push(options); return response({}); });
+  await assert.rejects(api.request('/api/budget'), {status: 401});
+  assert.equal(api.setPublicOperatorAccess(true), true);
+  assert.equal(api.authenticated, false); assert.equal(api.operatorAccess, true); assert.equal(api.publicOperatorAccess, true);
+  await api.request('/api/budget');
+  assert.equal(seen[0].headers['X-V2-Token'], undefined); assert.equal(seen[0].credentials, 'omit');
+  assert.equal(api.setPublicOperatorAccess(true), false);
+  api.setPublicOperatorAccess(false);
+  assert.equal(api.operatorAccess, false);
+  await assert.rejects(api.request('/api/budget'), {status: 401});
+});
+
+test('revoking public operator access cancels pending data and preserves private-token mode', async () => {
+  const pending = deferred(); let signal;
+  const api = new OperatorAPI(async (_path, options) => { signal = options.signal; return pending.promise; });
+  api.setPublicOperatorAccess(true);
+  const request = api.request('/api/runs');
+  api.setPublicOperatorAccess(false); pending.resolve(response({runs: []}));
+  assert.equal(signal.aborted, true); await assert.rejects(request, /cancelled/i);
+  api.unlock('private'); assert.equal(api.operatorAccess, true); assert.equal(api.authenticated, true);
+  api.lock(); assert.equal(api.operatorAccess, false);
+  api.setPublicOperatorAccess('true'); assert.equal(api.operatorAccess, false);
+});
+
+test('public and authenticated API requests bypass ngrok warnings without relying on cookies', async () => {
+  const seen = [], api = new OperatorAPI(async (path, options) => {
+    seen.push({path, options});
+    if (options.headers['ngrok-skip-browser-warning'] !== '1') return new Response('<html>ngrok warning</html>', {headers: {'Content-Type': 'text/html'}});
+    return response({accepted: true});
+  });
+  api.unlock('memory-only-token');
+  for (const [path, options] of [['/health', {publicRequest: true}], ['/api/budget', {}],
+    ['/api/voice/ticket', {method: 'POST', body: {language: 'auto', mode: 'practice'}}]]) {
+    assert.deepEqual(await api.request(path, options), {accepted: true});
+  }
+  assert.ok(seen.every(({options}) => options.credentials === 'omit' && options.headers['ngrok-skip-browser-warning'] === '1'));
+  assert.equal(seen[0].options.headers['X-V2-Token'], undefined);
+  assert.equal(seen[1].options.headers['X-V2-Token'], 'memory-only-token');
+});
+
+test('HTML responses are diagnosed without reading or reflecting the response body', async () => {
+  for (const blob of [false, true]) {
+    let reads = 0;
+    const body = async () => { reads++; throw Error('private response body'); };
+    const api = new OperatorAPI(async () => ({ok: true, status: 200,
+      headers: new Headers({'Content-Type': 'text/html; charset=utf-8'}), json: body, blob: body}));
+    api.unlock('memory-only-token');
+    await assert.rejects(api.request('/api/runs/example', {blob}), error => error instanceof ApiError &&
+      /HTML page instead of API data/.test(error.message) && !error.message.includes('private response body'));
+    assert.equal(reads, 0);
+  }
+});
+
 test('401 locks and invalidates in-flight requests without reflecting server bodies', async () => {
   let locked = 0;
   const api = new OperatorAPI(async () => ({ok: false, status: 401, json: () => { throw Error('must not read secrets'); }}), () => locked++);

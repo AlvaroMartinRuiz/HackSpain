@@ -4,25 +4,25 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>Socket Wizard · Operator</title>
+  <title>Socket Wizard · Call the clinic</title>
   <link rel="stylesheet" href="/web/ops.css">
   <script type="module" src="/web/app.mjs"></script>
 </head>
 <body>
   <a class="skip" href="#main">Skip to workspace</a>
   <header class="top">
-    <a class="brand" href="#overview"><img class="mark" src="/web/assets/mark-socket-wizard.svg" alt=""><span><strong>Socket Wizard</strong><small>Clínica Arenal · v2 operator</small></span></a>
-    <nav class="nav" aria-label="Main"><a href="#overview" aria-current="page">Overview</a><a href="#runs">Runs</a><a href="#talk">Rehearse</a></nav>
-    <div class="header-end"><span id="connection" class="pill">Connecting…</span><span id="active-session" class="pill warn" role="status" hidden></span><button id="global-stop" class="btn danger" hidden>End session</button><button id="logout" class="btn ghost" hidden>Lock workspace</button></div>
+    <a class="brand" href="#talk"><img class="mark" src="/web/assets/mark-socket-wizard.svg" alt=""><span><strong>Socket Wizard</strong><small>Clínica Arenal · voice receptionist</small></span></a>
+    <nav class="nav" aria-label="Main"><a href="#overview" data-operator-nav hidden>Overview</a><a href="#runs" data-operator-nav hidden>Runs</a><a href="#talk" aria-current="page">Talk to agent</a></nav>
+    <div class="header-end"><span id="connection" class="pill">Connecting…</span><span id="active-session" class="pill warn" role="status" hidden></span><button id="global-stop" class="btn danger" hidden>End call</button><a id="operator-login" class="btn ghost" href="#overview">Operator tools</a><button id="logout" class="btn ghost" hidden>Lock workspace</button></div>
   </header>
   <main id="main" class="page">
-    <section class="auth panel" id="auth-panel" aria-labelledby="auth-title">
+    <section class="auth panel" id="auth-panel" aria-labelledby="auth-title" hidden>
       <div><h2 id="auth-title">Unlock your workspace</h2><p>The operator token stays in page memory only. Locking clears private data and stops this browser’s microphone.</p></div>
       <form id="auth-form"><label for="token">Operator token</label><div class="row"><input id="token" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" required placeholder="V2 operator token"><button class="btn" id="unlock" type="submit">Unlock</button></div></form>
     </section>
     <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
-    <section id="view-overview" class="view" aria-labelledby="overview-title">
-      <div class="page-head"><div><p class="eyebrow">Floor</p><h1 id="overview-title">Ready for the next conversation</h1><p class="lede" id="execution-mode">An observable receptionist. Checking the configured carrier mode.</p></div><a class="btn" href="#talk">Rehearse a call</a></div>
+    <section id="view-overview" class="view" hidden aria-labelledby="overview-title">
+      <div class="page-head"><div><p class="eyebrow">Floor</p><h1 id="overview-title">Ready for the next conversation</h1><p class="lede" id="execution-mode">An observable receptionist. Checking the configured carrier mode.</p></div><a class="btn" href="#talk">Call with your microphone</a></div>
       <div class="kpis">
         <article class="kpi"><span>Backend</span><strong id="backend-status">Checking…</strong><small>Reachability is not provider validation</small></article>
         <article class="kpi"><span>Voice configuration</span><strong id="voice-ready">Unknown</strong><small>Stock voices first · microphone over localhost or HTTPS</small></article>
@@ -44,11 +44,35 @@
         <aside class="panel inspector"><h2>Evidence</h2><div class="tabs" role="tablist" aria-label="Run evidence"><button id="tab-actions" role="tab" aria-selected="true" aria-controls="evidence-actions" data-evidence="actions">Actions</button><button id="tab-timings" role="tab" aria-selected="false" tabindex="-1" aria-controls="evidence-timings" data-evidence="timings">Timings</button><button id="tab-errors" role="tab" aria-selected="false" tabindex="-1" aria-controls="evidence-errors" data-evidence="errors">Errors</button><button id="tab-grades" role="tab" aria-selected="false" tabindex="-1" aria-controls="evidence-grades" data-evidence="grades">Grades</button></div><div id="evidence-actions" role="tabpanel" aria-labelledby="tab-actions"></div><div id="evidence-timings" role="tabpanel" aria-labelledby="tab-timings" hidden></div><div id="evidence-errors" role="tabpanel" aria-labelledby="tab-errors" hidden></div><div id="evidence-grades" role="tabpanel" aria-labelledby="tab-grades" hidden></div><details><summary>Versioned trace &amp; manifest</summary><pre id="trace"></pre></details></aside>
       </section>
     </section>
-    <section id="view-talk" class="view" hidden aria-labelledby="talk-title">
-      <div class="page-head"><div><p class="eyebrow">Sandbox</p><h1 id="talk-title">Rehearse a conversation</h1><p class="lede">Test natural conversation as text or use your microphone. Neither mode submits to Prosper.</p></div></div>
+    <section id="view-talk" class="view" aria-labelledby="talk-title">
+      <div class="page-head"><div><p class="eyebrow">Browser call</p><h1 id="talk-title">Talk to the agent</h1><p class="lede">Call, speak naturally, and hear the agent answer in real time. Language is detected automatically.</p></div></div>
       <div class="talk-grid">
-        <aside class="panel setup"><h2>Session setup</h2><label for="language">Language</label><select id="language"><option value="es">Español</option><option value="en">English</option><option value="ca">Català</option></select><label for="mode">Environment</label><select id="mode"><option value="simulation">Simulation · fixture clinic</option><option value="practice">Practice · read-only clinic</option></select><p class="fine">Simulation changes clinic data, not model cost. Natural text and microphone sessions both use real paid providers.</p><label class="check"><input id="paid-consent" type="checkbox"> I authorize this paid session against the shared API allowance.</label><div class="stack"><button id="start-text" class="btn" disabled>Start text · paid</button><button id="start-voice" class="btn secondary" disabled>Start microphone · paid</button><button id="stop-session" class="btn danger" disabled>End session</button></div><p id="session-status" role="status" aria-live="polite">No active session.</p><p id="mic-help" class="fine">Allow microphone access when prompted. Localhost works without public HTTPS. Headphones reduce echo; use End session to release the microphone.</p><hr><h3>Offline two-intent fixture</h3><p>Scripted input and decisions, no model or voice quota. Always simulated, in your selected language.</p><button id="fixture" class="btn ghost" disabled>Run free fixture</button><p id="fixture-status" role="status"></p></aside>
-        <section class="panel conversation"><div class="panel-head"><h2>Conversation</h2><button id="inspect-session" class="btn ghost" disabled>Inspect run</button></div><div id="talk-transcript" class="transcript talk-transcript"><p class="empty">Start a session to speak or type naturally. No canned live success is displayed.</p></div><form id="turn-form"><label for="turn">Your next message</label><textarea id="turn" rows="3" maxlength="2000" disabled placeholder="What would you like help with?"></textarea><div class="composer-foot"><span class="fine">Text messages spend model quota. Enter a message, then Send.</span><button id="send-turn" class="btn" type="submit" disabled>Send</button></div></form></section>
+        <aside class="panel setup">
+          <h2>Call the agent</h2>
+          <p>Press Call and talk naturally, as you would when calling the clinic. The agent follows the language you speak.</p>
+          <p id="voice-access" class="fine" role="status">Connecting to the agent…</p>
+          <div class="stack"><button id="start-voice" class="btn" aria-describedby="voice-access mic-help" disabled>Call</button><button id="stop-session" class="btn danger" disabled>End call</button></div>
+          <p id="session-status" role="status" aria-live="polite">No active call.</p>
+          <p id="mic-help" class="fine">Allow microphone access when prompted. Headphones reduce echo. You can mute your microphone during the call or hang up at any time.</p>
+          <p class="fine">Practice calls do not change real appointments.</p>
+          <details id="call-options" hidden><summary>Testing options</summary>
+            <label for="mode">Clinic data</label><select id="mode"><option value="practice">Clinic · read-only practice</option><option value="simulation">Synthetic fixture clinic</option></select>
+            <button id="start-text" class="btn secondary" disabled>Start text chat</button>
+            <hr><h3>Offline two-intent fixture</h3>
+            <label for="language">Offline fixture language</label><select id="language"><option value="es">Español</option><option value="en">English</option><option value="ca">Català</option></select>
+            <p>Scripted input and decisions, no model or voice quota. This selector only affects the offline fixture, not your call.</p><button id="fixture" class="btn ghost" disabled>Run free fixture</button><p id="fixture-status" role="status"></p>
+          </details>
+        </aside>
+        <section class="panel conversation">
+          <div class="panel-head"><h2>Conversation</h2><button id="inspect-session" class="btn ghost" disabled hidden>Inspect run</button></div>
+          <div id="voice-controls" class="voice-call" hidden>
+            <div class="panel-head"><strong id="microphone-state">Connecting microphone</strong><button id="mute-voice" class="btn ghost" type="button" aria-pressed="false" disabled>Mute microphone</button></div>
+            <label for="microphone-level">Microphone input level</label><meter id="microphone-level" min="0" max="1" value="0">0</meter>
+            <p class="fine">Speak naturally and listen through your speakers or headphones. The input meter measures your microphone, not whether the agent heard or understood you.</p>
+          </div>
+          <div id="talk-transcript" class="transcript talk-transcript"><p class="empty">Start a microphone call to speak and hear replies, or start a text session to type.</p></div>
+          <form id="turn-form"><label for="turn">Your next message</label><textarea id="turn" rows="3" maxlength="2000" disabled placeholder="What would you like help with?"></textarea><div class="composer-foot"><span class="fine">Type your message, then Send.</span><button id="send-turn" class="btn" type="submit" disabled>Send</button></div></form>
+        </section>
       </div>
     </section>
   </main>

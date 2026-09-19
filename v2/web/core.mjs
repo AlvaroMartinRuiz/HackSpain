@@ -8,6 +8,7 @@ export function runPath(id) {
 }
 export function apiMessage(status) {
   return ({401: 'Operator authentication expired or was rejected. Unlock with a valid token.',
+    402: 'The calling allowance has been reached. Contact the operator before starting another call.',
     403: 'This operation is disabled. Ask the operator to check paid-provider and practice permissions.',
     404: 'This resource is unavailable. Refresh the history; recordings may not exist for this run.',
     409: 'A session or action is already in progress. End it before starting another.',
@@ -34,6 +35,7 @@ export class OperatorAPI {
     const controller = new AbortController(); this.#requests.add(controller);
     const timer = setTimeout(() => controller.abort(), timeout);
     const headers = publicRequest ? {} : {'X-V2-Token': this.#token};
+    headers['ngrok-skip-browser-warning'] = '1';
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     try {
       const response = await this.fetcher(path, {method, headers, body: body === undefined ? undefined : JSON.stringify(body),
@@ -43,6 +45,8 @@ export class OperatorAPI {
         if (response.status === 401 && !publicRequest) { this.lock(); this.onUnauthorized(); }
         throw new ApiError(response.status, apiMessage(response.status));
       }
+      const contentType = response.headers?.get('content-type')?.split(';')[0].trim().toLowerCase();
+      if (contentType === 'text/html' || contentType === 'application/xhtml+xml') throw new ApiError(0, 'The server returned an HTML page instead of API data. Refresh this page; if it persists, check the public tunnel URL.');
       const result = response.status === 204 ? null : await (blob ? response.blob() : response.json());
       if (generation !== this.#generation) throw new ApiError(0, 'Request cancelled.');
       return result;
