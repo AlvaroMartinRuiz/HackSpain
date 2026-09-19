@@ -30,7 +30,11 @@ from src.agent.tools import _OTHER_PLAN_QUESTION, _spell_email  # noqa: E402
 from src.domain.catalog import Catalog  # noqa: E402
 from src.domain.identity import dni_check_letter, normalize_text, parse_national_id  # noqa: E402
 from src.obs.store import store  # noqa: E402
+from src.telephony import session as session_module  # noqa: E402
 from src.telephony.session import CallSession, _two_letter  # noqa: E402
+
+# The opening re-ask (nobody has spoken yet) has its own fixed wait.
+session_module.SILENCE_OPENING_RETRY_S = 0.8
 from src.voice import tts  # noqa: E402
 
 FAILURES: list[str] = []
@@ -132,12 +136,21 @@ async def audio_checks() -> None:
 async def silence_checks() -> None:
     section("A2 · 'are you still there?' after silence")
     session, _ = new_session()
+    speak(session, FakeTTS(seconds=0.3, delay=0.05))
+    await session.say("How can I help?")
+    await asyncio.sleep(1.5)
+    check("nobody has spoken yet: the opening re-ask, in English",
+          any("anyone there" in t for t in agent_lines(session)), agent_lines(session)[-1:])
+    stop(session)
+
+    session, _ = new_session()
     session.language = "en"
+    session._heard_caller = True
     speak(session, FakeTTS(seconds=0.3, delay=0.05))
     await session.say("How can I help?")
     await asyncio.sleep(4.5)
     prompts = [t for t in agent_lines(session) if "there" in t or "hear me" in t]
-    check("two prompts, then quiet", len(prompts) == 2, prompts)
+    check("after the caller has spoken: two prompts, then quiet", len(prompts) == 2, prompts)
     history = [m["content"] for m in session.agent.messages if m["role"] == "assistant"]
     check("the prompt is in the model's history", bool(history) and "hear me" in history[-1])
     stop(session)
@@ -162,6 +175,7 @@ async def silence_checks() -> None:
 
     session, _ = new_session()
     session.language = "es"
+    session._heard_caller = True
     speak(session, FakeTTS(seconds=0.2, delay=0.05))
     await session.say("¿En qué puedo ayudarle?")
     await asyncio.sleep(1.6)
