@@ -18,6 +18,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.elevenlabs.tts import ElevenLabsHttpTTSService
+from pipecat.services.tts_service import TTSService
 from pipecat.workers.runner import WorkerRunner
 
 from v2.audio import RecordedSocket, RunTape
@@ -26,7 +27,7 @@ from v2.config import Config
 from v2.models import CallState
 from v2.store import RunStore
 from v2.tests.test_workflow import NOW, booking, decision
-from v2.voice import GraphProcessor, ProsperSerializer, voice_services
+from v2.voice import GraphProcessor, PacedAudioOutput, ProsperSerializer, TrackedTTS, voice_services
 from v2.workflow import CallController
 
 
@@ -67,29 +68,33 @@ class CodecTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(voices["es"], CartesiaTTSService)
             self.assertIsInstance(voices["ca"], ElevenLabsHttpTTSService)
             self.assertEqual(stt._settings.language, "multi")
+            self.assertEqual(stt._init_sample_rate, 16000)
+            self.assertTrue(all(voice._init_sample_rate == 24000 for voice in voices.values()))
+            self.assertEqual(voices["en"]._settings.language, "en")
+            self.assertEqual(voices["es"]._settings.language, "es")
+            self.assertEqual(voices["ca"]._settings.language, "ca")
+            self.assertEqual(voices["ca"]._settings.model, "eleven_v3")
+
+    async def test_catalan_never_silently_uses_a_non_catalan_model(self):
+        config = SimpleNamespace(missing_voice=lambda: [], voice_en="en", voice_es="es", voice_ca="ca",
+                                 elevenlabs_model="eleven_flash_v2_5")
+        async with aiohttp.ClientSession() as session:
+            with self.assertRaises(ValueError):
+                voice_services(config, session)
+
+    async def test_missing_stock_voice_is_rejected_before_service_setup(self):
+        config = SimpleNamespace(missing_voice=lambda: [], voice_en="en", voice_es="es", voice_ca="")
+        async with aiohttp.ClientSession() as session:
+            with self.assertRaises(PermissionError):
+                voice_services(config, session)
 
 
-class FixtureSpeaker(FrameProcessor):
-    async def process_frame(self, frame, direction):
-        await super().process_frame(frame, direction)
-        if isinstance(frame, TextFrame) and direction == FrameDirection.DOWNSTREAM:
-            await self.push_frame(TTSAudioRawFrame(audio=b"\x01\x01" * 160, sample_rate=8000, num_channels=1))
-        await self.push_frame(frame, direction)
-
-
-class FixtureOutput(FrameProcessor):
+class FixtureSpeaker(TrackedTTS, TTSService):
     def __init__(self):
-        super().__init__()
-        self.signal_frames = 0
+        super().__init__(sample_rate=24000, push_start_frame=True, push_stop_frames=True)
 
-    async def process_frame(self, frame, direction):
-        await super().process_frame(frame, direction)
-        if isinstance(frame, OutputAudioRawFrame):
-            await self.push_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
-            self.signal_frames += 1
-            await asyncio.sleep(0.02)
-            await self.push_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
-        await self.push_frame(frame, direction)
+    async def run_tts(self, text, context_id):
+        yield TTSAudioRawFrame(audio=b"\x10\x10" * 480, sample_rate=24000, num_channels=1, context_id=context_id)
 
 
 class PipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -104,8 +109,13 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         state = CallState(call_id="pipeline", reference_time=NOW)
         controller = CallController(state, FixtureClinic(), store, Dispatcher(store, "simulation"),
                                     interpreter=SimpleNamespace(decide=interpret))
-        output = FixtureOutput()
-        graph = GraphProcessor(controller, sent_signal=lambda: output.signal_frames, grace_s=0.01)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        tape = RunTape(Path(temporary.name), state.run_id)
+        wrapped = RecordedSocket(SimpleNamespace(send_text=AsyncMock()), tape)
+        graph = GraphProcessor(controller, sent_signal=lambda: tape.signal_frames, grace_s=0.01)
+        output = PacedAudioOutput(wrapped, "stream", graph, tail_s=0)
+        graph.output = output
         worker = PipelineWorker(Pipeline([graph, FixtureSpeaker(), output]),
                                 params=PipelineParams(audio_in_sample_rate=8000, audio_out_sample_rate=8000),
                                 enable_rtvi=False, idle_timeout_secs=5)
@@ -124,13 +134,13 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             for text in ("Please book for Lina Demo, born 1990-01-01", "Yes, option one", "Thank you"):
                 context = LLMContext()
                 context.add_message({"role": "user", "content": text})
-                before = output.signal_frames
+                before = tape.signal_frames
                 await worker.queue_frame(LLMContextFrame(context))
                 for _ in range(200):
-                    if output.signal_frames > before and graph.active is None:
+                    if tape.signal_frames > before and graph.active is None:
                         break
                     await asyncio.sleep(0.01)
-                self.assertGreater(output.signal_frames, before)
+                self.assertGreater(tape.signal_frames, before)
             await asyncio.wait_for(task, 3)
             self.assertTrue(state.all_resolved)
             self.assertEqual(state.intents["mine"].receipts[0]["source"], "simulation")
