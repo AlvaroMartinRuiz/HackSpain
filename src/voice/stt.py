@@ -116,7 +116,12 @@ class DeepgramTranscriber:
         if target == "ca":
             self._language = "ca"
         self._reader = asyncio.create_task(self._read(replacement))
-        if previous_reader is not None and not previous_reader.done():
+        current = asyncio.current_task()
+        if (
+            previous_reader is not None
+            and previous_reader is not current
+            and not previous_reader.done()
+        ):
             previous_reader.cancel()
             try:
                 await previous_reader
@@ -231,6 +236,8 @@ class DeepgramTranscriber:
 
         if kind == "UtteranceEnd":
             await self._flush()
+            if self.on_notice is not None:
+                await self.on_notice("stt_utterance_end", {})
             return
 
         if kind != "Results":
@@ -238,8 +245,9 @@ class DeepgramTranscriber:
 
         channel = message.get("channel") or {}
         alternatives = channel.get("alternatives") or [{}]
-        transcript = (alternatives[0].get("transcript") or "").strip()
-        languages = alternatives[0].get("languages") or channel.get("languages")
+        alternative = alternatives[0]
+        transcript = (alternative.get("transcript") or "").strip()
+        languages = alternative.get("languages") or channel.get("languages")
         if languages:
             self._language = str(languages[0])[:2]
 
@@ -247,6 +255,23 @@ class DeepgramTranscriber:
             return
 
         if message.get("is_final"):
+            confidence = alternative.get("confidence")
+            try:
+                low_confidence = (
+                    confidence is not None
+                    and float(confidence) < settings.stt_min_confidence
+                )
+            except (TypeError, ValueError):
+                low_confidence = False
+            if low_confidence:
+                if self.on_notice is not None and not self._pending:
+                    await self.on_notice("stt_low_confidence", {
+                        "text": transcript[:160],
+                        "confidence": confidence,
+                    })
+                if message.get("speech_final"):
+                    await self._flush()
+                return
             self._pending.append(transcript)
             if message.get("speech_final"):
                 await self._flush()
@@ -348,7 +373,12 @@ class ElevenLabsTranscriber:
         self._first_chunk = True
         self._heard_speech = False
         self._reader = asyncio.create_task(self._read(replacement))
-        if previous_reader is not None and not previous_reader.done():
+        current = asyncio.current_task()
+        if (
+            previous_reader is not None
+            and previous_reader is not current
+            and not previous_reader.done()
+        ):
             previous_reader.cancel()
             try:
                 await previous_reader

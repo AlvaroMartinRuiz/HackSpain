@@ -86,8 +86,11 @@ class Settings:
     deepgram_api_key: str = field(default_factory=lambda: _env("DEEPGRAM_API_KEY"))
     deepgram_model: str = field(default_factory=lambda: _env("DEEPGRAM_MODEL", default="nova-3"))
     deepgram_language: str = field(default_factory=lambda: _env("DEEPGRAM_LANGUAGE", default="multi"))
-    stt_endpointing_ms: int = field(default_factory=lambda: _int("STT_ENDPOINTING_MS", 300))
+    stt_endpointing_ms: int = field(default_factory=lambda: _int("STT_ENDPOINTING_MS", 500))
     stt_utterance_end_ms: int = field(default_factory=lambda: _int("STT_UTTERANCE_END_MS", 1000))
+    stt_min_confidence: float = field(
+        default_factory=lambda: _float("STT_MIN_CONFIDENCE", 0.45)
+    )
     # Digits over the phone are the sharpest scoring test in the set. Deepgram
     # will emit "44556677" instead of "cuatro cuatro cinco…".
     stt_numerals: bool = field(default_factory=lambda: _bool("STT_NUMERALS", True))
@@ -124,6 +127,14 @@ class Settings:
     elevenlabs_voice_id: str = field(
         default_factory=lambda: _env("ELEVENLABS_VOICE_ID", default="EXAVITQu4vr4xnSDxMaL")
     )
+    # Native accents: Sarah (American) for English, Gin (peninsular) for Spanish/Catalan.
+    elevenlabs_voice_id_en: str = field(
+        default_factory=lambda: _env("ELEVENLABS_VOICE_ID_EN", "ELEVENLABS_VOICE_ID",
+                                    default="EXAVITQu4vr4xnSDxMaL")
+    )
+    elevenlabs_voice_id_es: str = field(
+        default_factory=lambda: _env("ELEVENLABS_VOICE_ID_ES", default="DPwFpA8IrumLrL4D7PBE")
+    )
     elevenlabs_model: str = field(
         default_factory=lambda: _env("ELEVENLABS_MODEL", default="eleven_flash_v2_5")
     )
@@ -139,7 +150,7 @@ class Settings:
     openai_tts_model: str = field(default_factory=lambda: _env("OPENAI_TTS_MODEL", default="gpt-4o-mini-tts"))
 
     # Call behaviour
-    call_hard_limit_s: float = field(default_factory=lambda: _float("CALL_HARD_LIMIT_S", 170.0))
+    call_hard_limit_s: float = field(default_factory=lambda: _float("CALL_HARD_LIMIT_S", 145.0))
     submit_deadline_s: float = field(default_factory=lambda: _float("SUBMIT_DEADLINE_S", 25.0))
     greeting: str = field(
         default_factory=lambda: _env(
@@ -150,7 +161,7 @@ class Settings:
     barge_in: bool = field(default_factory=lambda: _bool("BARGE_IN", True))
     # Nearly every caller speaks English; a detected language replaces this.
     default_language: str = field(default_factory=lambda: _env("DEFAULT_LANGUAGE", default="en").lower())
-    silence_prompt_s: float = field(default_factory=lambda: _float("SILENCE_PROMPT_S", 7.0))
+    silence_prompt_s: float = field(default_factory=lambda: _float("SILENCE_PROMPT_S", 10.0))
     silence_prompt_max: int = field(default_factory=lambda: _int("SILENCE_PROMPT_MAX", 2))
     # Synthesise the greeting and fixed lines at start-up (~300 characters).
     tts_warm_cache: bool = field(default_factory=lambda: _bool("TTS_WARM_CACHE", True))

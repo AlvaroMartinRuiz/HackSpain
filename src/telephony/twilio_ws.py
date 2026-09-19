@@ -72,6 +72,7 @@ async def media_stream(websocket: WebSocket) -> None:
                     catalog=_catalog,
                     store=store,
                     llm=_llm,
+                    close=lambda: _close_quietly(websocket),
                 )
                 await session.record("call_started", {
                     "from_number": from_number,
@@ -97,6 +98,13 @@ async def media_stream(websocket: WebSocket) -> None:
 
     except WebSocketDisconnect:
         pass
+    except RuntimeError as exc:
+        # A session deadline may close the socket while receive_text is
+        # awaiting its next frame. That is an intentional clean shutdown.
+        if session is not None and "not connected" not in str(exc).lower():
+            await session.record("error", {
+                "where": "socket", "detail": f"RuntimeError: {exc}",
+            })
     except Exception as exc:
         if session is not None:
             await session.record("error", {"where": "socket", "detail": f"{type(exc).__name__}: {exc}"})

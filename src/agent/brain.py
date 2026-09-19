@@ -24,8 +24,9 @@ SOFT_FLUSH_CHARS = 130
 # Hold only a filler opener ("Thank you.") so it rides with the next sentence.
 # A real short line ("¿Hablo con Ella Smith?") must not wait for the LLM to finish.
 _FILLER_OPENER = re.compile(
-    r"^(thank you|thanks|i understand|great|ok|okay|"
-    r"de acuerdo|vale|perfecto|entendido|d['']acord|moltes gracies)\.?$",
+    r"^(thank you(?:,\s+[\wÀ-ÿ'-]+)?|thanks|i understand|great(?:,\s+[\wÀ-ÿ'-]+)?|"
+    r"of course|ok|okay|de acuerdo|por supuesto|vale|perfecto|entendido|"
+    r"d['']acord|moltes gracies)\.?$",
     re.IGNORECASE,
 )
 
@@ -224,6 +225,11 @@ class Agent:
                 "that language until the caller clearly switches. Do not translate or apologise."
             ),
         })
+
+    def note_prompt(self, text: str) -> None:
+        """Keep a deterministic line-quality prompt in conversational history."""
+        self.messages.append({"role": "assistant", "content": text})
+        self._trim()
 
     def note_interruption(self, spoken_so_far: str) -> None:
         """Record only what the caller actually heard before cutting in."""

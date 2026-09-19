@@ -23,11 +23,12 @@ from src.obs.store import CallStore
 from src.obs import tape
 from src.platform_api.client import PlatformClient, SubmitResult
 from src.voice import audio, tts
-from src.voice.language import decide_language
+from src.voice.language import decide_language, should_apply_language
 from src.voice.stt import build_transcriber, keyterms_for
 from src.voice.tts import Synthesizer, build_synthesizer
 
 Sender = Callable[[dict[str, Any]], Awaitable[None]]
+Closer = Callable[[], Awaitable[None]]
 
 # Deepgram's Nova-3 barge-in guidance: two words on an interim result, one
 # word on a final. A 7-character TV fragment still looks like speech.
@@ -47,6 +48,15 @@ RECOVERY_BUDGET_S = 6.0
 # seconds between our own limit and the harness cutting the call at three
 # minutes.
 DEADLINE_SETTLE_S = 5.0
+# After the Spanish greeting, give a slow English caller time to start before
+# we re-ask. Once they have spoken, wait a little longer between prompts.
+SILENCE_OPENING_RETRY_S = 10.0
+SILENCE_FIRST_PROMPT_S = 8.0
+SILENCE_SECOND_PROMPT_S = 12.0
+SILENCE_CLOSE_S = 18.0
+COMPLETED_CLOSE_S = 15.0
+# VAD often fires on room noise. If no transcript follows, keep waiting.
+SPEECH_HOLD_S = 1.8
 
 
 class CallSession:
@@ -61,6 +71,7 @@ class CallSession:
         llm: LLMClient,
         text_mode: bool = False,
         dry_run: bool = False,
+        close: Optional[Closer] = None,
     ) -> None:
         self.call_id = call_id
         self.stream_sid = stream_sid
@@ -70,6 +81,7 @@ class CallSession:
         self._send = send
         self.text_mode = text_mode
         self.dry_run = dry_run
+        self._close_wire = close
 
         self.client = PlatformClient(on_event=self._client_event)
         self.engine = SchedulingEngine(self.client, catalog)
@@ -111,8 +123,15 @@ class CallSession:
         self._silence_prompts = 0
         self.language_confidence = 0.0
         self.language_source = "default"
+        self._language_established = False
+        self._heard_caller = False
         self._started_at = time.monotonic()
         self._last_partial_at = 0.0
+        self._last_speech_started_at = 0.0
+        self._caller_speaking = False
+        self._waiting_since: Optional[float] = None
+        self._silence_prompts = 0
+        self._last_repair_prompt_at = 0.0
         self._media_frames = 0
         self._media_bytes = 0
         self._media_by_track: dict[str, int] = {}
@@ -173,6 +192,29 @@ class CallSession:
 
     async def _on_stt_notice(self, kind: str, payload: dict[str, Any]) -> None:
         await self.record(kind, payload)
+        if kind == "stt_utterance_end":
+            self._caller_speaking = False
+            if (
+                self._waiting_since is None
+                and not self.is_speaking
+                and not self._turn_lock.locked()
+            ):
+                self._waiting_since = time.monotonic()
+            return
+        if kind != "stt_low_confidence" or self._closed or self._closing:
+            return
+        self._caller_speaking = False
+        now = time.monotonic()
+        if (
+            now - self._last_repair_prompt_at < 4.0
+            or self.is_speaking
+            or self._turn_lock.locked()
+        ):
+            return
+        self._last_repair_prompt_at = now
+        prompt = phrases.pick(phrases.RETRY, self.language)
+        self.agent.note_agent_line(prompt)
+        await self.say(prompt)
 
     def _tape_target_bytes(self) -> int:
         """How long the tape should be right now, in µ-law bytes at 8 kHz.
@@ -311,7 +353,7 @@ class CallSession:
         await self.submit("no_action", {"call_id": self.call_id, "reason": reason})
 
     async def _deadline_loop(self) -> None:
-        """A call that cannot be done in three minutes has failed anyway."""
+        """Finish with enough room for draining and a worst-case submit retry."""
         try:
             await asyncio.sleep(settings.call_hard_limit_s)
         except asyncio.CancelledError:
@@ -324,10 +366,19 @@ class CallSession:
         except (asyncio.TimeoutError, Exception):
             pass
         await self.finalize("timed_out")
+        await self._close_connection()
+
+    async def _close_connection(self) -> None:
+        if self._close_wire is None:
+            return
+        try:
+            await self._close_wire()
+        except Exception:
+            pass
 
     # ---- speaking -----------------------------------------------------
 
-    async def say(self, text: str, first: bool = False) -> None:
+    async def say(self, text: str, first: bool = False, language: Optional[str] = None) -> None:
         text = (text or "").strip()
         if not text:
             return
@@ -336,13 +387,14 @@ class CallSession:
             # paciente]?"). Saying it aloud is worse than saying nothing.
             await self.record("decision", {"stage": "placeholder_suppressed", "text": text})
             return
+        spoken_language = language or self.language
         self._disarm_silence()
         # Logged when decided rather than when finished playing, so the console
         # shows the turn as the caller starts hearing it.
-        await self.record("agent_said", {"text": text, "greeting": first})
+        await self.record("agent_said", {"text": text, "greeting": first, "language": spoken_language})
         self._last_spoken = text
         if not self.text_mode:
-            await self._say_queue.put((self._generation, text, self.language))
+            await self._say_queue.put((self._generation, text, spoken_language))
 
     async def _speaker_loop(self) -> None:
         while True:
@@ -357,6 +409,7 @@ class CallSession:
                 await self._synthesize(generation, text, language)
             finally:
                 self._synthesizing -= 1
+                await self._audio_queue.put((generation, text, None))
             # A synthesis that failed outright never reaches _finish_speaking.
             self._arm_silence()
 
@@ -401,6 +454,15 @@ class CallSession:
             generation, text, chunk = await self._audio_queue.get()
             if generation != self._generation:
                 continue
+            if chunk is None:
+                if (
+                    self._audio_queue.empty()
+                    and self._say_queue.empty()
+                    and self._synthesizing == 0
+                ):
+                    await self._finish_speaking(text)
+                    playhead = max(playhead, time.monotonic())
+                continue
 
             if self._speaking_since is None:
                 self._speaking_since = time.monotonic()
@@ -428,10 +490,6 @@ class CallSession:
                 self._current_sent += len(frame)
                 playhead += audio.FRAME_MS / 1000
 
-            if self._audio_queue.empty() and self._say_queue.empty():
-                await self._finish_speaking(text)
-                playhead = max(playhead, time.monotonic())
-
     async def _finish_speaking(self, text: str) -> None:
         if self._speaking_since is None:
             return
@@ -441,6 +499,7 @@ class CallSession:
         self._current_text = ""
         self._current_sent = 0
         self._current_total = 0
+        self._waiting_since = time.monotonic()
         await self.record("agent_turn_end", {"text": text})
         self._arm_silence()
 
@@ -464,21 +523,37 @@ class CallSession:
             task.cancel()
 
     async def _silence_watch(self) -> None:
+        wait_s = (
+            SILENCE_OPENING_RETRY_S
+            if not self._heard_caller and self._silence_prompts == 0
+            else settings.silence_prompt_s
+        )
         try:
-            await asyncio.sleep(settings.silence_prompt_s)
+            await asyncio.sleep(wait_s)
         except asyncio.CancelledError:
             return
-        if self.is_speaking or self._turn_lock.locked() or self._closing or self._sealing:
+        if (
+            self.is_speaking
+            or self._caller_speaking
+            or self._turn_lock.locked()
+            or self._closing
+            or self._sealing
+        ):
             return
-        text = phrases.silence_prompt(self.language, self._silence_prompts)
+        if not self._heard_caller:
+            text, language = _opening_retry(self._silence_prompts == 0)
+        else:
+            text = phrases.silence_prompt(self.language, self._silence_prompts)
+            language = self.language
         self._silence_prompts += 1
         await self.record("decision", {
             "stage": "silence_prompt",
             "attempt": self._silence_prompts,
-            "silent_s": settings.silence_prompt_s,
+            "silent_s": wait_s,
+            "language": language,
         })
         self.agent.note_agent_line(text)
-        await self.say(text)
+        await self.say(text, language=language)
 
     async def _send_media(self, frame: bytes) -> None:
         self._pad_tape("outbound")
@@ -537,7 +612,13 @@ class CallSession:
         return overlap >= ECHO_OVERLAP
 
     def _worthy_barge_in(self, text: str, *, final: bool) -> bool:
-        """Deepgram: two interim words, or one word on a final result."""
+        """Stop ourselves when the caller talks over us; never on a cough.
+
+        Interims need two words. A final "Hello?" may interrupt the greeting,
+        but a one-word fragment mid-sentence is not enough to cut them off by
+        starting our next turn early — that path is `_on_final`, which waits
+        until STT commits.
+        """
         words = _words(text)
         return bool(words) if final else len(words) >= MIN_BARGE_IN_WORDS
 
@@ -564,13 +645,18 @@ class CallSession:
         self._silence_prompts = 0
 
     async def _on_speech_started(self) -> None:
-        self._caller_is_talking()
+        # Do not reset the silence clock here: room noise would cancel the
+        # English re-greeting and leave the line idle until the harness cuts it.
+        self._caller_speaking = True
+        self._last_speech_started_at = time.monotonic()
         await self.record("caller_speaking", {})
 
     async def _on_partial(self, text: str) -> None:
         if not self._looks_like_echo(text):
             self._caller_is_talking()
         now = time.monotonic()
+        self._caller_speaking = True
+        self._waiting_since = None
         if now - self._last_partial_at > 0.4:
             self._last_partial_at = now
             await self.record("stt_partial", {"text": text})
@@ -593,17 +679,41 @@ class CallSession:
         text = (text or "").strip()
         if not text:
             return
+        self._caller_speaking = False
+        self._waiting_since = None
+        self._silence_prompts = 0
         if self._looks_like_echo(text):
             await self.record("stt_echo", {"text": text})
             return
+        self._heard_caller = True
         if settings.barge_in and self.is_speaking and self._worthy_barge_in(text, final=True):
             await self._interrupt(text)
-        decision = decide_language(text, _two_letter(language) if language else None, self.language)
-        changed = decision.code != self.language
-        if changed or decision.confidence >= self.language_confidence:
+        decision = decide_language(
+            text,
+            _two_letter(language) if language else None,
+            self.language,
+            established=self._language_established,
+        )
+        apply_language = should_apply_language(
+            self.language, self._language_established, decision
+        )
+        changed = apply_language and decision.code != self.language
+        if apply_language and (changed or decision.confidence >= self.language_confidence):
             self.language = decision.code
             self.language_confidence = decision.confidence
             self.language_source = decision.source
+        elif decision.code != self.language:
+            await self.record("language_ignored", {
+                "current": self.language,
+                "candidate": decision.code,
+                "confidence": decision.confidence,
+                "source": decision.source,
+                "text": text[:120],
+            })
+        if apply_language and decision.source in {"text_markers", "catalan_markers"}:
+            self._language_established = True
+        elif apply_language and decision.source == "deepgram_stream" and len(_words(text)) >= 5:
+            self._language_established = True
         await self.record("stt_final", {
             "text": text,
             "language": self.language,
@@ -718,3 +828,10 @@ def _drain(queue: asyncio.Queue) -> None:
 
 def _words(text: str) -> list[str]:
     return [token for token in (text or "").lower().split() if token]
+
+
+def _opening_retry(first: bool) -> tuple[str, str]:
+    """Re-ask after the greeting if nobody has spoken yet."""
+    if first:
+        return phrases.OPENING_RETRY[0]
+    return phrases.OPENING_RETRY[1]

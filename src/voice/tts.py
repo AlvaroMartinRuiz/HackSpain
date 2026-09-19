@@ -103,6 +103,13 @@ async def warm_cache() -> int:
     return warmed
 
 
+def elevenlabs_voice_for_language(language: str) -> str:
+    code = language.lower()[:2]
+    if code == "en":
+        return settings.elevenlabs_voice_id_en or settings.elevenlabs_voice_id
+    return settings.elevenlabs_voice_id_es or settings.elevenlabs_voice_id
+
+
 class Synthesizer:
     async def stream(
         self, text: str, language: str = "es"
@@ -161,7 +168,7 @@ class ElevenLabsSynthesizer(Synthesizer):
         )
 
     async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
-        path = f"/v1/text-to-speech/{settings.elevenlabs_voice_id}/stream"
+        path = f"/v1/text-to-speech/{elevenlabs_voice_for_language(language)}/stream"
         code = language.lower()[:2]
         model = elevenlabs_model_for_language(code)
         params = {"output_format": "ulaw_8000"}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -10,16 +11,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import settings  # noqa: E402
 from src.agent.brain import Agent  # noqa: E402
-from src.voice.language import decide_language  # noqa: E402
+from src.voice.language import decide_language, should_apply_language  # noqa: E402
 from src.voice.stt import DeepgramTranscriber, ElevenLabsTranscriber  # noqa: E402
 from src.voice.tts import (  # noqa: E402
     deepgram_model_for_language,
     elevenlabs_model_for_language,
+    elevenlabs_voice_for_language,
 )
 
 
 async def _noop(*_args) -> None:
     return None
+
+
+async def _low_confidence_is_rejected() -> bool:
+    finals: list[str] = []
+    notices: list[str] = []
+
+    async def on_final(text: str, _language: str | None) -> None:
+        finals.append(text)
+
+    async def on_notice(kind: str, _payload: dict) -> None:
+        notices.append(kind)
+
+    transcriber = DeepgramTranscriber(_noop, on_final, on_notice=on_notice)
+    await transcriber._handle({
+        "type": "Results",
+        "is_final": True,
+        "speech_final": True,
+        "channel": {
+            "alternatives": [{
+                "transcript": "television noise",
+                "confidence": 0.1,
+                "languages": ["en"],
+            }],
+        },
+    })
+    return not finals and notices == ["stt_low_confidence"]
 
 
 def check(label: str, ok: bool, detail: str = "") -> int:
@@ -44,6 +72,39 @@ def main() -> int:
         passed += check(label, decision.code == expected,
                         f"{decision.code} {decision.confidence:.2f} via {decision.source}")
 
+    name_decision = decide_language(
+        "José Martínez", "es", current="en", established=True
+    )
+    total += 1
+    passed += check(
+        "Spanish name does not switch an English call",
+        name_decision.code == "en",
+        f"{name_decision.code} via {name_decision.source}",
+    )
+    total += 1
+    passed += check(
+        "Scribe spa maps to Spanish",
+        decide_language("José Martínez", "spa", current="es").code == "es",
+    )
+    named_sentence = decide_language(
+        "Hello, it's for José Martínez", "es", current="en", established=True
+    )
+    total += 1
+    passed += check(
+        "Spanish name inside English stays English",
+        named_sentence.code == "en",
+        f"{named_sentence.code} via {named_sentence.source}",
+    )
+    explicit_spanish = decide_language(
+        "Hola, necesito una cita por la mañana, por favor.", "es", current="en"
+    )
+    total += 1
+    passed += check(
+        "Clear Spanish sentence may switch an English call",
+        should_apply_language("en", True, explicit_spanish),
+        f"{explicit_spanish.code} via {explicit_spanish.source}",
+    )
+
     from src.agent.brain import _liveness_response, _ready_to_speak
 
     total += 1
@@ -67,6 +128,13 @@ def main() -> int:
     qs = parse_qs(urlparse(DeepgramTranscriber(_noop, _noop)._url()).query)
     total += 1
     passed += check("numerals are on", qs.get("numerals") == ["true"])
+    total += 1
+    passed += check("endpointing allows a mid-thought pause", qs.get("endpointing") == ["500"])
+    total += 1
+    passed += check(
+        "low-confidence noise is not sent to the agent",
+        asyncio.run(_low_confidence_is_rejected()),
+    )
 
     scribe = parse_qs(urlparse(ElevenLabsTranscriber(_noop, _noop)._url()).query)
     total += 1
@@ -91,6 +159,25 @@ def main() -> int:
         "Catalan ElevenLabs model",
         elevenlabs_model_for_language("ca") == settings.elevenlabs_catalan_model,
         settings.elevenlabs_catalan_model,
+    )
+
+    total += 1
+    passed += check(
+        "Spanish ElevenLabs voice is not the English voice",
+        elevenlabs_voice_for_language("es") != elevenlabs_voice_for_language("en"),
+        f"es={elevenlabs_voice_for_language('es')[:8]} en={elevenlabs_voice_for_language('en')[:8]}",
+    )
+    total += 1
+    passed += check(
+        "English ElevenLabs voice is Sarah",
+        elevenlabs_voice_for_language("en") == settings.elevenlabs_voice_id_en,
+    )
+
+    total += 1
+    passed += check(
+        "internal deadline leaves harness cleanup room",
+        settings.call_hard_limit_s <= 145,
+        str(settings.call_hard_limit_s),
     )
 
     total += 1

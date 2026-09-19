@@ -14,6 +14,11 @@ SILENCE_PROMPTS: dict[str, list[str]] = {
            "Em sent? Encara soc aquí quan vulgui."],
 }
 
+OPENING_RETRY: list[tuple[str, str]] = [
+    ("Hello, is anyone there? Clínica Arenal, how can I help you?", "en"),
+    ("¿Hay alguien al teléfono? Le escucho.", "es"),
+]
+
 RETRY: dict[str, str] = {
     "en": "Sorry, I didn't catch that. Could you say it again?",
     "es": "Perdone, no le he oído bien. ¿Me lo repite, por favor?",
@@ -39,4 +44,6 @@ def silence_prompt(language: str, attempt: int) -> str:
 def fixed_lines(language: str) -> list[str]:
     """Everything above for one language, for warming a voice cache."""
     code = (language or "")[:2]
-    return [*SILENCE_PROMPTS.get(code, []), RETRY.get(code, ""), HOLD.get(code, "")]
+    return [*SILENCE_PROMPTS.get(code, []), RETRY.get(code, ""), HOLD.get(code, "")] + [
+        line for line, lang in OPENING_RETRY if lang == code
+    ]

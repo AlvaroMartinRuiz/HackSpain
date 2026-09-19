@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
 import websockets  # noqa: E402
+from websockets.exceptions import ConnectionClosedOK  # noqa: E402
 
 from src.voice.audio import (  # noqa: E402
     FRAME_BYTES,
@@ -138,6 +139,8 @@ async def one_call(url: str, index: int, seconds: float, payload: bytes | None) 
             }))
             await asyncio.sleep(1.0)
             reader.cancel()
+    except ConnectionClosedOK:
+        outcome.notes.append("server closed the completed or silent call")
     except Exception as exc:
         outcome.error = f"{type(exc).__name__}: {exc}"
 

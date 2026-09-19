@@ -853,7 +853,8 @@ class ToolBox:
             "status": result.status,
             "on_file": {"name": f"{fields['given_name']} {fields['first_surname']} {fields['second_surname']}",
                         "national_id": fields["national_id"]},
-            "guidance": "They are on file now. Nothing is booked on this call — do not offer a slot.",
+            "guidance": "Confirm they are on file and say goodbye in one short utterance. "
+                        "Nothing is booked on this call; do not offer a slot or add generic filler.",
         }
 
     async def _tool_end_without_booking(self, args: dict[str, Any]) -> dict[str, Any]:
