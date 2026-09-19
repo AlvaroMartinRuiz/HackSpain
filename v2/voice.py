@@ -28,8 +28,10 @@ from pipecat.services.elevenlabs.tts import ElevenLabsHttpTTSService
 from pipecat.services.elevenlabs.tts_base import ELEVENLABS_MODEL_LANGUAGES
 from pipecat.transcriptions.language import Language
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.turns.user_start.min_words_user_turn_start_strategy import MinWordsUserTurnStartStrategy
 from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import SpeechTimeoutUserTurnStopStrategy
+from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 from starlette.websockets import WebSocketState
@@ -500,12 +502,14 @@ def voice_services(config: Config, http_session):
 
 
 def user_aggregators(config, *, vad_analyzer):
+    if getattr(config, "smart_turn", False):
+        # One analyzer per call: it buffers this caller's audio.
+        stop = TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())
+    else:
+        stop = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=getattr(config, "user_speech_timeout_s", 0.6))
     return LLMContextAggregatorPair(LLMContext(), user_params=LLMUserAggregatorParams(
         vad_analyzer=vad_analyzer,
-        user_turn_strategies=UserTurnStrategies(
-            start=[MinWordsUserTurnStartStrategy(min_words=1)],
-            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=getattr(config, "user_speech_timeout_s", 0.6))],
-        ),
+        user_turn_strategies=UserTurnStrategies(start=[MinWordsUserTurnStartStrategy(min_words=1)], stop=[stop]),
     ))
 
 

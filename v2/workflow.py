@@ -5,6 +5,7 @@ import re
 import time
 from typing import TypedDict
 
+from langgraph.errors import NodeCancelledError
 from langgraph.graph import END, START, StateGraph
 from langsmith.run_helpers import tracing_context
 
@@ -30,7 +31,8 @@ TEXT = {
         "simulation": "Simulation only: the action has been recorded locally.",
         "empty": "There is no available option for that request.",
         "emergency": "Please seek urgent medical care now. I cannot book a routine appointment for these symptoms.",
-        "hello": "Clínica Arenal. How can I help you?",
+        # Most callers speak English; "buenos días" tells a Spanish caller they can answer in Spanish.
+        "hello": "Clínica Arenal, good morning, buenos días. How can I help?",
         "facts": "I can help with clinic locations, doctors, insurance and appointments. Which detail do you need?",
     },
     "es": {
@@ -103,6 +105,8 @@ class CallController:
         self.lock = asyncio.Lock()
         self.interpret_task: asyncio.Task | None = None
         self.pending_reply: Reply | None = None
+        self.unanswered: list[str] = []
+        self.answered_turns = 0
         self.store.save(state, manifest)
         graph = StateGraph(Flow)
         graph.add_node("interpret", self._interpret)
@@ -130,7 +134,13 @@ class CallController:
             raise ValueError("turn must contain between 1 and 2000 characters")
         async with self.lock:
             if expected_epoch is not None and expected_epoch != self.epoch:
+                self._carry(text)
                 return None
+            # A caller who pauses mid-sentence arrives as several fragments; the ones that never
+            # got an answer are part of what they said, not noise to drop.
+            if self.unanswered:
+                text = " ".join([*self.unanswered, text])[-2000:]
+                self.unanswered = []
             self.pending_reply = None
             self.state.history = [*self.state.history[-7:], {"role": "caller", "text": text}]
             self.state.turn += 1
@@ -145,8 +155,13 @@ class CallController:
                     result = await self.graph.ainvoke({"call": self.state, "text": text, "decision": decision,
                                                       "epoch": epoch, "reply": None},
                                                      {"recursion_limit": 6})
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, NodeCancelledError):
+                # LangGraph reports a cancelled interpretation as NodeCancelledError; either way the
+                # caller moved on before this fragment was answered or applied.
                 if epoch != self.epoch and not asyncio.current_task().cancelling():
+                    if self.state.history and self.state.history[-1] == {"role": "caller", "text": text}:
+                        self.state.history = self.state.history[:-1]
+                    self._carry(text)
                     return None
                 raise
             except Exception as exc:
@@ -162,10 +177,14 @@ class CallController:
                 return None
             reply = result["reply"]
             self.pending_reply = reply
+            self.answered_turns += 1
             self.store.event(self.state.run_id, "response_planned", {
                 **reply.model_dump(), "elapsed_ms": round((time.monotonic() - started) * 1000),
             })
             return reply
+
+    def _carry(self, text: str):
+        self.unanswered = [" ".join([*self.unanswered, text])[-2000:]]
 
     async def _interpret(self, flow: Flow) -> dict:
         if self.state.emergency or triage(flow["text"]).escalate or CA_URGENT.search(normalize_text(flow["text"])):
@@ -181,10 +200,12 @@ class CallController:
 
     async def _apply(self, flow: Flow) -> dict:
         decision, text = flow["decision"], flow["text"]
-        detected = decide_language(text, decision.language, self.state.language, established=self.state.turn > 1)
+        # Established once the caller has been answered; fragments that were never answered do not count.
+        established = self.answered_turns > 0
+        detected = decide_language(text, decision.language, self.state.language, established=established)
         if decision.language == "ca" and re.search(r"\b(vull|voldria|puc|meva|meu|bon dia|si us plau)\b", normalize_text(text)):
             self.state.language = "ca"
-        elif should_apply_language(self.state.language, self.state.turn > 1, detected):
+        elif should_apply_language(self.state.language, established, detected):
             self.state.language = detected.code
         language = self.state.language
         lines, offered = [], {}

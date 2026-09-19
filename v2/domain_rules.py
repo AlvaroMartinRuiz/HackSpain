@@ -262,8 +262,11 @@ _HEDGE = re.compile(
     r"morning|afternoon|evening|tarde|tarda|mati|noche|nit|"
     r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|lunes|martes|miercoles|jueves|viernes|sabado|"
     r"domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)\b")
+# Speech-to-text writes "the first one" as "the 1st 1" and "la primera" as "la 1a".
 _ORDINALS = {"first": 1, "primera": 1, "primer": 1, "primero": 1, "second": 2, "segunda": 2, "segundo": 2,
-             "segona": 2, "third": 3, "tercera": 3, "tercero": 3, "tercer": 3}
+             "segona": 2, "third": 3, "tercera": 3, "tercero": 3, "tercer": 3,
+             "1st": 1, "2nd": 2, "3rd": 3, "1a": 1, "2a": 2, "3a": 3, "1o": 1, "2o": 2, "3o": 3,
+             "1ª": 1, "2ª": 2, "3ª": 3, "1º": 1, "2º": 2, "3º": 3}
 _CARDINALS = {"one": 1, "uno": 1, "una": 1, "u": 1, "two": 2, "dos": 2, "dues": 2, "three": 3, "tres": 3}
 _COLLECTIVE = r"(?:both|all|ambas|ambos|los dos|las dos|ambdues|totes|tots|les dues)"
 

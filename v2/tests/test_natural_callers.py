@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import AsyncMock
 
@@ -18,6 +19,8 @@ class NaturalConsentTests(unittest.TestCase):
             ("Sí, la primera opción me va bien.", 1), ("Vale, la segunda, por favor", 2), ("Sí, la opción 2", 2),
             ("Perfecto, resérvemela", None), ("Sí, a las nueve y cuarto me va bien", None),
             ("D'acord, la primera", 1), ("Ok, the 9:15 one", None),
+            # As speech-to-text actually wrote them on a live call.
+            ("Yes. The 1st 1 works for me.", 1), ("Yes, the 2nd one", 2), ("Sí, la 1a", 1),
         ]:
             with self.subTest(text=text):
                 self.assertEqual(confirmation_selection(text)[:2], (True, option))
@@ -90,6 +93,62 @@ class CompressedDecisionTests(unittest.IsolatedAsyncioTestCase):
             "specialty_id": "general_practice", "when": "tomorrow", "evidence": yes}))
         self.assertEqual(self.state.intents["mine"].status, "completed")
         self.assertEqual(len(self.state.intents["mine"].receipts), 1)
+
+
+class PausingCallerTests(unittest.IsolatedAsyncioTestCase):
+    """A caller who pauses mid-sentence reaches the controller as fragments; the voice
+    pipeline cancels the unanswered one when the next fragment arrives."""
+
+    async def asyncSetUp(self):
+        self.store = RunStore()
+        self.addCleanup(self.store.close)
+        self.state = CallState(call_id="pausing", language="en", reference_time=NOW)
+        self.heard: list[str] = []
+        self.decisions: list = []
+        controller = self
+
+        class Interpreter:
+            async def decide(self, text, state):
+                controller.heard.append(text)
+                if not controller.decisions:
+                    await asyncio.Event().wait()  # still thinking when the next fragment lands
+                return controller.decisions.pop(0)
+
+        self.controller = CallController(self.state, FixtureClinic(), self.store,
+                                         Dispatcher(self.store, "simulation", AsyncMock()), Interpreter())
+
+    async def fragment_then_rest(self, first, rest, answer):
+        pending = asyncio.create_task(self.controller.turn(first, expected_epoch=self.controller.epoch))
+        while not self.heard:
+            await asyncio.sleep(0)
+        self.controller.interrupt(source="caller_input")
+        self.assertIsNone(await pending)
+        self.decisions.append(answer)
+        return await self.controller.turn(rest, expected_epoch=self.controller.epoch)
+
+    async def test_an_unanswered_fragment_is_heard_with_the_rest(self):
+        first, rest = "Hi, this is Lina Demo, born 1990-01-01.", "I need a GP tomorrow."
+        reply = await self.fragment_then_rest(first, rest, decision({
+            "op": "create", "intent_id": "mine", "action": "book", "subject": "Lina Demo",
+            "evidence": "Lina Demo, born 1990-01-01", "identity": WHO,
+            "specialty_id": "general_practice", "when": "tomorrow"}))
+        self.assertEqual(self.heard[-1], f"{first} {rest}")
+        self.assertEqual(self.state.intents["mine"].status, "awaiting_confirmation")
+        self.assertTrue(reply.offers)
+
+    async def test_language_is_not_locked_by_fragments_that_were_never_answered(self):
+        # No word-level cue either way: only the model's reading of the language can decide it,
+        # and that is only trusted until the call's language is established.
+        first, rest = "Lina Demo,", "1990-01-01. Medicina general."
+        reply = await self.fragment_then_rest(first, rest, decision(
+            {"op": "ask", "question": "identity", "evidence": "Lina Demo"}, language="es"))
+        self.assertGreater(self.state.turn, 1)
+        self.assertEqual(self.state.language, "es")
+        self.assertEqual(reply.language, "es")
+
+    def test_the_greeting_invites_both_languages(self):
+        from v2.workflow import TEXT
+        self.assertIn("buenos días", TEXT["en"]["hello"])
 
 
 if __name__ == "__main__":
