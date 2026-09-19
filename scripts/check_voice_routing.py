@@ -115,6 +115,11 @@ def main() -> int:
         (_liveness_response("Are you still there?", "es") or "").startswith("Yes"),
     )
     total += 1
+    passed += check(
+        "Hola me oyes is a line check in Spanish",
+        (_liveness_response("Hola, ¿me oyes?", "es") or "").startswith("Sí"),
+    )
+    total += 1
     passed += check("Short question speaks now", _ready_to_speak(["¿Hablo con Ella Smith?"]))
     total += 1
     passed += check("Filler waits", not _ready_to_speak(["Thank you."]))
@@ -188,6 +193,15 @@ def main() -> int:
         "Doctor titles stay with the name",
         chunks == ["La cita es con Dra. Elena Iglesias.", "¿Le viene bien?"],
         repr(chunks),
+    )
+
+    from src.agent import phrases as voice_phrases
+
+    total += 1
+    passed += check(
+        "model errors are not phrased as deafness",
+        voice_phrases.MODEL_DOWN["es"] != voice_phrases.RETRY["es"]
+        and "oído" not in voice_phrases.MODEL_DOWN["es"].lower(),
     )
 
     print(f"\n{passed}/{total} voice-routing checks passed")

@@ -791,6 +791,26 @@ table.calls-table tr.empty-row { border-bottom: none; }
 .sheet .status.bad { color: hsl(var(--rose-ink)); }
 .sheet .status.ok { color: hsl(var(--emerald-ink)); }
 
+.talk-hint {
+  margin: 18px 0 0;
+  font-size: 13px;
+  color: var(--muted-text);
+  line-height: 1.45;
+}
+.talk-hint.bad { color: hsl(var(--rose-ink)); }
+.talk-hint.ok { color: hsl(var(--emerald-ink)); }
+.talk-log {
+  margin: 12px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  font: 13px/1.45 var(--mono);
+  white-space: pre-wrap;
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 6px; }
 ::-webkit-scrollbar-thumb:hover { background: hsl(var(--slate)); }

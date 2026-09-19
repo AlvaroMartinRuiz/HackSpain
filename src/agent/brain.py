@@ -71,7 +71,7 @@ class Agent:
                 completion = await self._run_round()
             except LLMError as exc:
                 await self.session.record("error", {"where": "llm", "detail": str(exc)})
-                await self.session.say(phrases.pick(phrases.RETRY, self.session.language))
+                await self.session.say(phrases.pick(phrases.MODEL_DOWN, self.session.language))
                 return
 
             spoke = spoke or bool(completion.text.strip())
@@ -100,6 +100,10 @@ class Agent:
             for briefing in self._pending_briefings:
                 self.messages.append({"role": "system", "content": briefing})
             self._pending_briefings.clear()
+
+            if not spoke:
+                await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
+                spoke = True
 
             if round_index == settings.llm_max_tool_rounds - 1:
                 await self.session.record("error", {
@@ -343,7 +347,9 @@ def _liveness_response(text: str, language: str) -> Optional[str]:
         "can you hear me",
     }
     spanish = {
-        "hola esta ahi", "esta ahi", "sigue ahi", "me oye", "me escucha",
+        "hola esta ahi", "esta ahi", "sigue ahi", "me oye", "me oyes",
+        "me escucha", "me escuchas", "hola me oye", "hola me oyes",
+        "hola me escucha", "hola me escuchas",
     }
     catalan = {
         "em sent", "em sents", "hola em sents", "encara hi es",

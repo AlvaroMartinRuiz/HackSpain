@@ -75,6 +75,7 @@ function parseRoute(hash = location.hash) {
   const match = path.match(/^\/calls\/([^/]+)$/);
   if (match) return { page: "call", id: decodeURIComponent(match[1]) };
   if (path === "/rehearse") return { page: "rehearse" };
+  if (path === "/talk") return { page: "talk" };
   return { page: "live" };
 }
 
@@ -82,6 +83,7 @@ function pathFor(page, id) {
   if (page === "calls") return "#/calls";
   if (page === "call") return `#/calls/${encodeURIComponent(id)}`;
   if (page === "rehearse") return "#/rehearse";
+  if (page === "talk") return "#/talk";
   return "#/";
 }
 
@@ -118,6 +120,7 @@ function applyRoute() {
     calls: "Calls · Socket Wizard",
     call: "Call · Socket Wizard",
     rehearse: "Rehearse · Socket Wizard",
+    talk: "Talk · Socket Wizard",
   };
   document.title = titles[route.page] || "Socket Wizard";
 
@@ -128,6 +131,10 @@ function applyRoute() {
     }
   } else if (route.page === "rehearse") {
     el("rehearse-turns").focus();
+  }
+
+  if (route.page !== "talk" && window.Talk && Talk.active()) {
+    Talk.hangup();
   }
 }
 
@@ -731,6 +738,7 @@ function _mergeLiveSummary(detail, summary) {
 
 function applyEvent(message) {
   const { event, summary } = message;
+  if (event && typeof Talk !== "undefined") Talk.onEvent(event);
   if (summary) {
     mergeSummary(summary);
     renderAgents();
@@ -905,6 +913,12 @@ el("rehearse-form").addEventListener("submit", (event) => {
   runRehearsal();
 });
 
+el("talk-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  Talk.pickup();
+});
+el("talk-hang").addEventListener("click", () => Talk.hangup());
+
 el("btn-back").addEventListener("click", (event) => {
   if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
     return;
@@ -916,7 +930,7 @@ el("btn-back").addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (state.page === "call") go(state.returnTo || "#/");
-  else if (state.page === "rehearse") go("#/");
+  else if (state.page === "rehearse" || state.page === "talk") go("#/");
 });
 
 loadAssets().then(() => {

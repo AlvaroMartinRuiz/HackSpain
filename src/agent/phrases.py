@@ -25,6 +25,12 @@ RETRY: dict[str, str] = {
     "ca": "Perdoni, no l'he sentit bé. M'ho pot repetir, si us plau?",
 }
 
+MODEL_DOWN: dict[str, str] = {
+    "en": "Sorry, give me one moment. Could you say that again?",
+    "es": "Perdone, un momento. ¿Me lo dice otra vez?",
+    "ca": "Perdoni, un moment. M'ho pot repetir?",
+}
+
 HOLD: dict[str, str] = {
     "en": "One moment, please.",
     "es": "Un momento, por favor.",
@@ -44,6 +50,11 @@ def silence_prompt(language: str, attempt: int) -> str:
 def fixed_lines(language: str) -> list[str]:
     """Everything above for one language, for warming a voice cache."""
     code = (language or "")[:2]
-    return [*SILENCE_PROMPTS.get(code, []), RETRY.get(code, ""), HOLD.get(code, "")] + [
+    return [
+        *SILENCE_PROMPTS.get(code, []),
+        RETRY.get(code, ""),
+        MODEL_DOWN.get(code, ""),
+        HOLD.get(code, ""),
+    ] + [
         line for line, lang in OPENING_RETRY if lang == code
     ]

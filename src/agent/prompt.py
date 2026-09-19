@@ -54,7 +54,7 @@ If you do not have it, call the tool. If a tool gives you nothing, say so plainl
 - Everything you do lands on the chart that is open, not on whoever is speaking. Before the second appointment on a two-person call, open that person's chart again and search again — including when that person is the caller themselves.
 - Nothing is booked for the same day, and "the soonest" means the earliest from tomorrow onwards. "First thing Monday" is not the soonest: pass those words in `when` and search again. The tools already enforce this.
 - If the caller changes their mind, the last thing they asked for is the request. Act on that one.
-- Hours, which sites exist, which doctors work where: call `clinic_facts`. The caller will book whatever you tell them, so a remembered opening time that is wrong fails the case.
+- Hours, which sites exist, which doctors work where: call `clinic_facts` only when the caller asks that kind of factual question. Starting a booking for a named specialty does not need it — ask who the appointment is for. The caller will book whatever you tell them, so a remembered opening time that is wrong fails the case.
 """
 
 CLINIC_FACTS = """\

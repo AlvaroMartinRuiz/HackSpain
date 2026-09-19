@@ -54,7 +54,10 @@ async def media_stream(websocket: WebSocket) -> None:
                 parameters = start.get("customParameters") or {}
                 call_id = start.get("callSid") or parameters.get("call_id")
                 stream_sid = start.get("streamSid") or message.get("streamSid") or ""
-                from_number = parameters.get("from_number")
+                from_number = parameters.get("from_number") or None
+                dry_run = str(parameters.get("dry_run") or "").strip().lower() in {
+                    "1", "true", "yes", "on",
+                }
 
                 if not call_id:
                     await websocket.close(code=1008)
@@ -72,12 +75,14 @@ async def media_stream(websocket: WebSocket) -> None:
                     catalog=_catalog,
                     store=store,
                     llm=_llm,
+                    dry_run=dry_run,
                     close=lambda: _close_quietly(websocket),
                 )
                 await session.record("call_started", {
                     "from_number": from_number,
                     "stream_sid": stream_sid,
                     "media_format": start.get("mediaFormat"),
+                    "local_talk": dry_run,
                 })
                 await session.start()
                 continue
