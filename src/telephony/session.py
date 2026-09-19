@@ -21,6 +21,7 @@ from src.obs.store import CallStore
 from src.obs import tape
 from src.platform_api.client import PlatformClient, SubmitResult
 from src.voice import audio
+from src.voice.language import decide_language
 from src.voice.stt import build_transcriber
 from src.voice.tts import Synthesizer, build_synthesizer
 
@@ -99,6 +100,8 @@ class CallSession:
         self._sealing = False
         self._frozen = False
         self.language = "es"
+        self.language_confidence = 0.0
+        self.language_source = "default"
         self._started_at = time.monotonic()
         self._last_partial_at = 0.0
         self._media_frames = 0
@@ -461,9 +464,33 @@ class CallSession:
         if self._looks_like_echo(text):
             await self.record("stt_echo", {"text": text})
             return
-        await self.record("stt_final", {"text": text, "language": language})
-        if language:
-            self.language = language.lower()[:2]
+        decision = decide_language(text, language, self.language)
+        changed = decision.code != self.language
+        if changed or decision.confidence >= self.language_confidence:
+            self.language = decision.code
+            self.language_confidence = decision.confidence
+            self.language_source = decision.source
+        await self.record("stt_final", {
+            "text": text,
+            "language": self.language,
+            "language_confidence": self.language_confidence,
+            "language_source": self.language_source,
+        })
+        if changed:
+            await self.record("language_detected", {
+                "language": self.language,
+                "confidence": self.language_confidence,
+                "source": self.language_source,
+            })
+            self.agent.note_language(self.language)
+            if self.transcriber is not None and hasattr(self.transcriber, "set_stream_language"):
+                try:
+                    await self.transcriber.set_stream_language(self.language)
+                except Exception as exc:
+                    await self.record("error", {
+                        "where": "stt_language_switch",
+                        "detail": f"{type(exc).__name__}: {exc}",
+                    })
         if self._closed:
             return
 

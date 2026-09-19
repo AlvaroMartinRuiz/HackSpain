@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
 from src.domain.catalog import Catalog, age_months  # noqa: E402
+from src.domain.engine import SchedulingEngine  # noqa: E402
 from src.domain.gazetteer import locate  # noqa: E402
 from src.domain.identity import (  # noqa: E402
     normalize_email,
@@ -66,6 +67,11 @@ def main() -> int:
         normalize_email("ana guion bajo garcia arroba hotmail punto es"),
         "ana_garcia@hotmail.es",
     )
+
+    section("Insurance names survive ordinary speech-recognition errors")
+    engine = SchedulingEngine(None, catalog)  # type: ignore[arg-type]
+    check("Sinitas resolves to Sanitas", engine.resolve_insurer("Sinitas"), "sanitas")
+    check("Nueva Mutua keeps its separator", engine.resolve_insurer("Nueva Mutua"), "nueva_mutua")
 
     section("Appointment type follows the specialty and the record, never the request")
     cases = [

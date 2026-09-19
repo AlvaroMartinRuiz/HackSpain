@@ -37,6 +37,8 @@ class LiveCall:
     status: str = "ringing"
     stage: str = "greeting"
     language: str = "es"
+    language_confidence: Optional[float] = None
+    language_source: Optional[str] = None
     transcript: list[dict[str, Any]] = field(default_factory=list)
     events: deque = field(default_factory=lambda: deque(maxlen=MAX_EVENTS_IN_MEMORY))
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -73,6 +75,8 @@ class LiveCall:
             "status": self.status,
             "stage": self.stage,
             "language": self.language,
+            "language_confidence": self.language_confidence,
+            "language_source": self.language_source,
             "duration_s": self.duration_s if self.ended_at is None else self._final_duration(),
             "turns": self.metrics["turns"],
             "interruptions": self.metrics["interruptions"],
@@ -244,6 +248,17 @@ class CallStore:
             })
             if payload.get("language"):
                 call.language = payload["language"]
+            if payload.get("language_confidence") is not None:
+                call.language_confidence = payload["language_confidence"]
+            if payload.get("language_source"):
+                call.language_source = payload["language_source"]
+        elif kind == "language_detected":
+            if payload.get("language"):
+                call.language = payload["language"]
+            if payload.get("confidence") is not None:
+                call.language_confidence = payload["confidence"]
+            if payload.get("source"):
+                call.language_source = payload["source"]
         elif kind == "agent_said":
             call.transcript.append({"role": "agent", "text": payload.get("text", ""), "ts": _now_iso()})
             call.metrics["turns"] += 1

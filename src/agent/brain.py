@@ -15,9 +15,11 @@ if TYPE_CHECKING:  # pragma: no cover
     from src.telephony.session import CallSession
 
 SENTENCE_END = re.compile(r"(?<=[.!?…])\s+|(?<=[.!?…])$|\n+")
+ABBREVIATION_END = re.compile(r"\b(?:dr|dra|sr|sra|mr|mrs|ms)\.$", re.IGNORECASE)
 SOFT_BREAK = re.compile(r"(?<=[,;:])\s+")
 MAX_HISTORY_MESSAGES = 26
 SOFT_FLUSH_CHARS = 130
+MIN_SPEECH_CHUNK_CHARS = 64
 
 
 class Agent:
@@ -30,6 +32,7 @@ class Agent:
         ]
         self._buffer = ""
         self._pending_briefings: list[str] = []
+        self._language = "es"
 
     # ---- conversation -------------------------------------------------
 
@@ -43,6 +46,13 @@ class Agent:
         started = time.perf_counter()
         self.messages.append({"role": "user", "content": text})
         self._trim()
+
+        liveness = _liveness_response(text, self.session.language)
+        if liveness:
+            self.messages.append({"role": "assistant", "content": liveness})
+            await self.session.say(liveness)
+            await self.session.note_response_latency(int((time.perf_counter() - started) * 1000))
+            return
 
         spoke = False
         for round_index in range(settings.llm_max_tool_rounds):
@@ -95,19 +105,26 @@ class Agent:
     async def _run_round(self) -> Completion:
         """Stream one completion, speaking each sentence as it lands."""
         self._buffer = ""
+        speech_parts: list[str] = []
         completion: Optional[Completion] = None
 
         async for kind, value in self.llm.stream(self._sound_history(), self.tools.schemas()):
             if kind == "text":
                 self._buffer += value
                 for sentence in self._drain():
-                    await self.session.say(sentence)
+                    speech_parts.append(sentence)
+                    chunk = " ".join(speech_parts)
+                    if len(chunk) >= MIN_SPEECH_CHUNK_CHARS or len(speech_parts) >= 2:
+                        await self.session.say(chunk)
+                        speech_parts.clear()
             else:
                 completion = value
 
         tail = self._buffer.strip()
         if tail:
-            await self.session.say(tail)
+            speech_parts.append(tail)
+        if speech_parts:
+            await self.session.say(" ".join(speech_parts))
         self._buffer = ""
 
         assert completion is not None
@@ -125,7 +142,15 @@ class Agent:
         """Pull whole sentences out of the buffer so speech starts early."""
         out: list[str] = []
         while True:
-            match = SENTENCE_END.search(self._buffer)
+            match = next(
+                (
+                    candidate for candidate in SENTENCE_END.finditer(self._buffer)
+                    if not ABBREVIATION_END.search(
+                        self._buffer[:candidate.start()].rstrip()
+                    )
+                ),
+                None,
+            )
             if match and match.end() > 0:
                 sentence = self._buffer[: match.start()].strip()
                 self._buffer = self._buffer[match.end() :]
@@ -173,6 +198,21 @@ class Agent:
         tool_calls and their results, which strict gateways reject outright.
         """
         self._pending_briefings.append(chart_briefing(patient, context))
+
+    def note_language(self, language: str) -> None:
+        """Pin the LLM to the language selected for this call only."""
+        code = (language or "es").lower()[:2]
+        if code == self._language:
+            return
+        self._language = code
+        label = {"es": "Spanish", "ca": "Catalan", "en": "English"}.get(code, code)
+        self.messages.append({
+            "role": "system",
+            "content": (
+                f"The caller's current language is {label} ({code}). Continue naturally in "
+                "that language until the caller clearly switches. Do not translate or apologise."
+            ),
+        })
 
     def note_interruption(self, spoken_so_far: str) -> None:
         """Record only what the caller actually heard before cutting in."""
@@ -251,3 +291,23 @@ def _clip(value: Any, limit: int = 1200) -> Any:
     if len(text) <= limit:
         return value
     return {"truncated": True, "preview": text[:limit]}
+
+
+def _liveness_response(text: str, language: str) -> Optional[str]:
+    """Answer line checks immediately instead of spending an LLM round trip."""
+    clean = re.sub(r"[^a-zà-ÿ ]+", " ", (text or "").lower())
+    clean = " ".join(clean.split())
+    checks = {
+        "hello", "hi", "hello are you still there", "are you there",
+        "are you still there", "can you hear me",
+        "hola", "hola está ahí", "esta ahi", "me oye", "me escucha",
+        "em sent", "em sents", "hola em sents",
+    }
+    if clean not in checks:
+        return None
+    code = (language or "es").lower()[:2]
+    if code == "en":
+        return "Yes, I'm here and I can hear you. Please go ahead."
+    if code == "ca":
+        return "Sí, soc aquí i el sento bé. Digui'm, si us plau."
+    return "Sí, estoy aquí y le escucho bien. Dígame, por favor."

@@ -21,7 +21,23 @@ log = logging.getLogger("elturno")
 
 # ElevenLabs Creator allows 10 concurrent Flash requests.
 _TTS_GATE = asyncio.Semaphore(10)
-_SUPPORTED_ELEVENLABS_LANGUAGES = {"en", "es"}
+_SUPPORTED_ELEVENLABS_LANGUAGES = {"ca", "en", "es"}
+
+
+def deepgram_model_for_language(language: str) -> str:
+    return (
+        settings.deepgram_tts_model_en
+        if language.lower().startswith("en")
+        else settings.deepgram_tts_model_es
+    )
+
+
+def elevenlabs_model_for_language(language: str) -> str:
+    return (
+        settings.elevenlabs_catalan_model
+        if language.lower().startswith("ca")
+        else settings.elevenlabs_model
+    )
 
 
 class Synthesizer:
@@ -50,11 +66,7 @@ class DeepgramSynthesizer(Synthesizer):
         )
 
     async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
-        model = (
-            settings.deepgram_tts_model_en
-            if language.lower().startswith("en")
-            else settings.deepgram_tts_model_es
-        )
+        model = deepgram_model_for_language(language)
         params = {
             "model": model,
             "encoding": "mulaw",
@@ -66,8 +78,8 @@ class DeepgramSynthesizer(Synthesizer):
             "POST", "/v1/speak", params=params, json={"text": text}
         ) as response:
             if response.status_code != 200:
-                await response.aread()
-                raise RuntimeError(f"deepgram tts HTTP {response.status_code}")
+                detail = (await response.aread()).decode("utf-8", "replace")[:240]
+                raise RuntimeError(f"deepgram tts HTTP {response.status_code}: {detail}")
             async for chunk in response.aiter_bytes(chunk_size=1600):
                 if chunk:
                     yield chunk
@@ -87,20 +99,23 @@ class ElevenLabsSynthesizer(Synthesizer):
 
     async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
         path = f"/v1/text-to-speech/{settings.elevenlabs_voice_id}/stream"
-        params = {"output_format": "ulaw_8000", "optimize_streaming_latency": "3"}
+        code = language.lower()[:2]
+        model = elevenlabs_model_for_language(code)
+        params = {"output_format": "ulaw_8000"}
+        if not model.startswith("eleven_v3"):
+            params["optimize_streaming_latency"] = "3"
         body = {
             "text": text,
-            "model_id": settings.elevenlabs_model,
+            "model_id": model,
             "voice_settings": {"stability": 0.4, "similarity_boost": 0.7, "speed": 1.0},
         }
-        code = language.lower()[:2]
         if code in _SUPPORTED_ELEVENLABS_LANGUAGES:
             body["language_code"] = code
 
         async with self._client.stream("POST", path, params=params, json=body) as response:
             if response.status_code != 200:
-                await response.aread()
-                raise RuntimeError(f"elevenlabs HTTP {response.status_code}")
+                detail = (await response.aread()).decode("utf-8", "replace")[:240]
+                raise RuntimeError(f"elevenlabs HTTP {response.status_code}: {detail}")
             async for chunk in response.aiter_bytes(chunk_size=1600):
                 if chunk:
                     yield chunk
