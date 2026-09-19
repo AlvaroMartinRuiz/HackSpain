@@ -567,11 +567,16 @@ class ToolBox:
                 "end_without_booking if they still want it."
             )
             return result
+        loc = self.catalog.locations.get(location_id)
+        if loc and loc.address:
+            serving["address"] = loc.address
+            result["nearest_serving"] = serving
         result["guidance"] = (
-            "Tell the caller which site that is, in one sentence. Then pass "
-            f"`location_id={location_id}` to find_appointments. Do not pick a site from memory "
-            "or from the addresses in the briefing — the closest site that cannot serve them "
-            "is the wrong answer."
+            "Tell the caller which site that is, in one sentence"
+            + (f" ({loc.address})" if loc and loc.address else "")
+            + f". Then pass `location_id={location_id}` to find_appointments. "
+            "Do not pick a site from memory. Do not invent a bus, metro, entrance or floor: "
+            "those are not on file. If they ask how to get there, give only this address."
         )
         return result
 
@@ -816,8 +821,8 @@ class ToolBox:
                 "site": plan.location_id,
             },
             "reference_number": None,
-            "guidance": "Read the appointment back once and close warmly. The platform did not "
-                        "provide a reference number, so never invent one.",
+            "guidance": "Read the appointment back once and ask if they need anything else. "
+                        "The platform did not provide a reference number, so never invent one.",
         }
 
     async def _tool_reschedule_appointment(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -933,8 +938,8 @@ class ToolBox:
             "status": result.status,
             "on_file": {"name": f"{fields['given_name']} {fields['first_surname']} {fields['second_surname']}",
                         "national_id": fields["national_id"]},
-            "guidance": "Confirm they are on file and say goodbye in one short utterance. "
-                        "Nothing is booked on this call; do not offer a slot or add generic filler.",
+            "guidance": "Confirm they are on file, ask if they need anything else, and only then "
+                        "say goodbye. Nothing is booked on this call; do not offer a slot.",
         }
 
     async def _tool_end_without_booking(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -972,7 +977,8 @@ class ToolBox:
             "why": args.get("explanation") or "",
         })
         return {"recorded": result.accepted or result.duplicate, "reason": reason,
-                "guidance": "Tell the caller plainly why, in one sentence, and close politely."}
+                "guidance": "Tell the caller plainly why, in one sentence, then ask if they need "
+                            "anything else before goodbye."}
 
     async def _tool_escalate_call(self, args: dict[str, Any]) -> dict[str, Any]:
         reason = self._clean_reason(args.get("reason"))

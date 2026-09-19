@@ -50,7 +50,7 @@ RECOVERY_BUDGET_S = 6.0
 DEADLINE_SETTLE_S = 5.0
 # After the Spanish greeting, give a slow English caller time to start before
 # we re-ask. Once they have spoken, wait a little longer between prompts.
-SILENCE_OPENING_RETRY_S = 10.0
+SILENCE_OPENING_RETRY_S = 18.0
 SILENCE_FIRST_PROMPT_S = 8.0
 SILENCE_SECOND_PROMPT_S = 12.0
 SILENCE_CLOSE_S = 18.0
@@ -403,7 +403,7 @@ class CallSession:
             # paciente]?"). Saying it aloud is worse than saying nothing.
             await self.record("decision", {"stage": "placeholder_suppressed", "text": text})
             return
-        spoken_language = language or self.language
+        spoken_language = tts.speech_language(text, language or self.language)
         self._disarm_silence()
         # Logged when decided rather than when finished playing, so the console
         # shows the turn as the caller starts hearing it.
@@ -521,6 +521,16 @@ class CallSession:
         await self.record("agent_turn_end", {"text": text})
         self._arm_silence()
 
+    def _call_is_done(self) -> bool:
+        """The record is closed, or we already said goodbye. Don't re-prompt."""
+        closing = {"no_action", "book", "cancel", "register", "reschedule", "escalate"}
+        if any(
+            result.action in closing and (result.accepted or result.duplicate)
+            for result in self.submissions
+        ):
+            return True
+        return bool(_FAREWELL.search(self._last_spoken or ""))
+
     # ---- the caller goes quiet ------------------------------------------
 
     def _arm_silence(self) -> None:
@@ -528,6 +538,7 @@ class CallSession:
         if (self.text_mode or self._closing or self._sealing or self.is_speaking
                 or self._turn_lock.locked()
                 or self._turn_parts
+                or self._call_is_done()
                 or self._silence_prompts >= settings.silence_prompt_max):
             return
         self._disarm_silence()
@@ -558,10 +569,12 @@ class CallSession:
             or self._turn_lock.locked()
             or self._closing
             or self._sealing
+            or self._call_is_done()
         ):
             return
         if not self._heard_caller:
-            text, language = _opening_retry(self._silence_prompts == 0)
+            text = phrases.silence_prompt(self.language, 0)
+            language = self.language
         else:
             text = phrases.silence_prompt(self.language, self._silence_prompts)
             language = self.language
@@ -950,6 +963,10 @@ class CallSession:
 
 # "[nombre del paciente]", "[full name]": a template slot, never a real word.
 _PLACEHOLDER = re.compile(r"\[[^\]\d]{3,}\]")
+_FAREWELL = re.compile(
+    r"\b(goodbye|good bye|bye|adios|adiós|adeu|hasta luego|a reveure)\b",
+    re.IGNORECASE,
+)
 
 
 # Transcribers disagree: Deepgram says "es", Scribe says "spa", and "spa"[:2]
@@ -972,10 +989,3 @@ def _drain(queue: asyncio.Queue) -> None:
 
 def _words(text: str) -> list[str]:
     return re.findall(r"[^\W_]+", (text or "").lower())
-
-
-def _opening_retry(first: bool) -> tuple[str, str]:
-    """Re-ask after the greeting if nobody has spoken yet."""
-    if first:
-        return phrases.OPENING_RETRY[0]
-    return phrases.OPENING_RETRY[1]

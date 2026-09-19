@@ -30,7 +30,8 @@ HOLD_IF_QUIET_S = settings.agent_hold_s
 # A real short line ("¿Hablo con Ella Smith?") must not wait for the LLM to finish.
 _FILLER_OPENER = re.compile(
     r"^(thank you(?:,\s+[\wÀ-ÿ'-]+)?|thanks|i understand|great(?:,\s+[\wÀ-ÿ'-]+)?|"
-    r"of course|ok|okay|de acuerdo|por supuesto|vale|perfecto|entendido|"
+    r"of course|ok|okay|i can help with that|i can help you with that|"
+    r"de acuerdo|por supuesto|vale|perfecto|entendido|"
     r"d['']acord|moltes gracies)\.?$",
     re.IGNORECASE,
 )
@@ -50,6 +51,7 @@ class Agent:
         ]
         self._buffer = ""
         self._pending_briefings: list[str] = []
+        self._held = False
         # Matches the session's starting language, so the first real detection is
         # what adds the "current language" note, not the default.
         self._language = settings.default_language
@@ -76,6 +78,7 @@ class Agent:
             return
 
         spoke = False
+        self._held = False
         filler = asyncio.create_task(self._hold_if_quiet(), name="hold-if-quiet")
         try:
             for round_index in range(settings.llm_max_tool_rounds):
@@ -117,21 +120,24 @@ class Agent:
                 if generation != self.session._generation:
                     return
 
-                if not spoke:
-                    await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
-                    spoke = True
-
                 if round_index == settings.llm_max_tool_rounds - 1:
                     await self.session.record("error", {
                         "where": "tool_loop", "detail": "hit the tool round cap",
                     })
 
             if not spoke:
-                await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
+                await self._say_hold()
         finally:
             filler.cancel()
 
         await self.session.note_response_latency(int((time.perf_counter() - started) * 1000))
+
+    async def _say_hold(self) -> None:
+        """At most one filler per caller turn, in the language already on the line."""
+        if self._held or self.session.is_speaking:
+            return
+        self._held = True
+        await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
 
     async def _hold_if_quiet(self) -> None:
         """Keep audible audio on the line while the model or tools are still working."""
@@ -143,7 +149,7 @@ class Agent:
                 or self.session._caller_speaking or self.session._turn_parts
                 or self.session._pending_turn):
             return
-        await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
+        await self._say_hold()
 
     async def _run_round(self, generation: Optional[int] = None) -> Completion:
         """Stream one completion, speaking each sentence as it lands."""

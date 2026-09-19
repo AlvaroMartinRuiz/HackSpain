@@ -175,7 +175,7 @@ class Settings:
     )
     # Nearly every caller speaks English; a detected language replaces this.
     default_language: str = field(default_factory=lambda: _env("DEFAULT_LANGUAGE", default="en").lower())
-    silence_prompt_s: float = field(default_factory=lambda: _float("SILENCE_PROMPT_S", 10.0))
+    silence_prompt_s: float = field(default_factory=lambda: _float("SILENCE_PROMPT_S", 16.0))
     silence_prompt_max: int = field(default_factory=lambda: _int("SILENCE_PROMPT_MAX", 2))
     # Synthesise the greeting and fixed lines at start-up (~300 characters).
     tts_warm_cache: bool = field(default_factory=lambda: _bool("TTS_WARM_CACHE", True))

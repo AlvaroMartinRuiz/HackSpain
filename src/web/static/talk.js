@@ -266,6 +266,13 @@ const Talk = (() => {
     setStatus("On the line. Wait for the greeting, then speak.");
     sendTimer = setInterval(() => {
       if (!running) return;
+      const playing = sources.length > 0
+        || (playCtx && playAt > playCtx.currentTime + 0.08);
+      if (playing) {
+        pending = new Float32Array(0);
+        sendMedia(Uint8Array.from({ length: FRAME_SAMPLES }, () => SILENCE));
+        return;
+      }
       const frame = takeFrame() || Uint8Array.from({ length: FRAME_SAMPLES }, () => SILENCE);
       sendMedia(frame);
     }, FRAME_MS);

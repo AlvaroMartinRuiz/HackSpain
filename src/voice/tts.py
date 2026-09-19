@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from typing import AsyncIterator, Optional
 
 import httpx
@@ -109,6 +110,17 @@ def elevenlabs_voice_for_language(language: str) -> str:
     if code == "en":
         return settings.elevenlabs_voice_id_en or settings.elevenlabs_voice_id
     return settings.elevenlabs_voice_id_es or settings.elevenlabs_voice_id
+
+
+_SPANISH_SCRIPT = re.compile(r"[áéíóúñ¿¡]", re.IGNORECASE)
+
+
+def speech_language(text: str, fallback: str) -> str:
+    """Voice follows the line being spoken, not a stale session lock."""
+    code = (fallback or "es")[:2]
+    if _SPANISH_SCRIPT.search(text or ""):
+        return "es" if code != "ca" else "ca"
+    return code if code in {"es", "en", "ca"} else "es"
 
 
 class Synthesizer:

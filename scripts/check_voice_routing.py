@@ -63,7 +63,7 @@ def main() -> int:
         ("Spanish text", "Hola, necesito una cita por la mañana, por favor.", "es", "es"),
         ("Catalan text", "Bon dia, voldria demanar hora amb el metge, si us plau.", "es", "ca"),
         ("English text", "Hello, I need the earliest appointment please.", "en", "en"),
-        ("English hello", "Hello?", None, "en"),
+        ("lone hello keeps the current language", "Hello?", None, "es"),
         ("Spanish hora is not Catalan", "Necesito hora por la mañana, por favor.", None, "es"),
     ]
     for label, text, hint, expected in samples:

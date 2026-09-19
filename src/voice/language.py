@@ -59,12 +59,11 @@ def decide_language(
 
     english_hits = len(words & _ENGLISH_WORDS)
     spanish_hits = len(words & _SPANISH_WORDS)
-    # A lone "Hello?" is how many English callers start. It is not a line check,
-    # and Deepgram often has no hint yet.
-    if words and words <= {"hello", "hi", "hey"} and catalan_hits == 0 and spanish_hits == 0:
-        return LanguageDecision("en", 0.78, "text_markers")
-    if words and words <= {"hola"} and catalan_hits == 0 and english_hits == 0:
-        return LanguageDecision("es", 0.78, "text_markers")
+    # Picking up the phone ("Hello?", "Hola") is not choosing a language.
+    # Keep whoever is already on the line until they say a real phrase.
+    if words and words <= {"hello", "hi", "hey", "hola"}:
+        locked = current if current in {"es", "ca", "en"} else "es"
+        return LanguageDecision(locked, 0.55, "current")
     if english_hits >= 2 and english_hits > spanish_hits:
         return LanguageDecision("en", min(0.92, 0.68 + english_hits * 0.05), "text_markers")
     if spanish_hits >= 2 and spanish_hits >= english_hits:
