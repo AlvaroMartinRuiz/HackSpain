@@ -72,7 +72,7 @@ def outcome_request(outcome: str, language: str = "en") -> RehearsalRequest:
                    "subject": "Ada Demo Ficticia" if outcome == "register" else ("caller" if outcome == "no_action" else "Lina Demo"),
                    "evidence": text}]
     if outcome == "no_action":
-        operations.append({"op": "refuse", "intent_id": "request", "reason": "out_of_scope"})
+        operations.append({"op": "refuse", "intent_id": "request", "reason": "out_of_scope", "evidence": text})
         return RehearsalRequest(language=language, turns=[turn(text, operations), turn(words["finish"], [{"op": "finish"}])])
     if outcome == "register":
         operations.append({"op": "prepare", "intent_id": "request", "registration": deepcopy(REGISTRATION), "evidence": text})

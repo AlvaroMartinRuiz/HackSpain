@@ -1,4 +1,3 @@
-/* Adapted from the v1 ops.css Prosper palette, header, panels and call inspector. */
 :root {
   color-scheme: light;
   --brand: hsl(10 100% 55%); --brand-hover: hsl(10 85% 45%); --brand-tint: hsl(30 100% 92%);

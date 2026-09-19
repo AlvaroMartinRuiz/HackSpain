@@ -19,7 +19,7 @@ from v2.store import RunStore
 from v2.tests.test_voice import FixtureSpeaker
 from v2.tests.test_workflow import NOW, booking, decision
 from v2.voice import run_voice
-from v2.workflow import CallController
+from v2.workflow import CallController, TEXT
 
 
 class SyntheticSocket:
@@ -119,6 +119,8 @@ class SocketPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(len(base64.b64decode(m["media"]["payload"])) == 160 for m, _ in media))
             self.assertTrue(all(b[1] - a[1] >= 0.018 for a, b in zip(media, media[1:])))
             events = store.report(state.run_id)["events"]
+            planned = [event["payload"] for event in events if event["kind"] == "response_planned"]
+            self.assertEqual(planned[0]["text"], TEXT["en"]["hello"])
             self.assertFalse([e for e in events if e["kind"] == "pipeline_error"])
             self.assertTrue(any(e["kind"] == "completion_close" for e in events))
             self.assertTrue((Path(root) / "audio" / state.run_id / "outbound.wav").exists())

@@ -16,7 +16,8 @@ from v2.api import create_app
 from v2.config import Config
 from v2.evaluation import demo_request
 from v2.providers import VercelInterpreter
-from v2.models import Intent
+from v2.platform_api.client import SubmitResult
+from v2.models import MAX_CALL_TURNS, Intent, Operation, TurnDecision
 
 
 class OperatorAPITests(unittest.TestCase):
@@ -80,6 +81,28 @@ class OperatorAPITests(unittest.TestCase):
                                               json={"language": "en", "mode": "live"}).status_code, 422)
                 self.assertEqual(client.post(path, headers=self.headers,
                                               json={"language": "en", "gateway_key": "evil"}).status_code, 422)
+
+    def test_approved_carrier_sink_cannot_leak_into_browser_rehearsal(self):
+        config = replace(self.config, mode="live", allow_submissions=True, release_approved=True, api_key="clinic-test")
+        submitted = AsyncMock(return_value=SubmitResult("no_action", {}, 200, {}, 1))
+        async def voice(socket, stream_sid, controller, config):
+            intent = Intent(intent_id="request", action="no_action", subject="synthetic caller")
+            controller.state.intents[intent.intent_id] = intent
+            receipt = await controller.dispatcher.execute(controller.state, intent, "no_action", {"reason": "out_of_scope"})
+            await socket.send_json({"event": "receipt", "source": receipt["source"]})
+        with patch("v2.platform_api.client.PlatformClient.submit", submitted), patch("v2.voice.run_voice", side_effect=voice):
+            with TestClient(create_app(config)) as client:
+                with client.websocket_connect("/ws", headers=self.headers) as socket:
+                    socket.send_json(self.handshake({"call_id": "carrier-fixture", "stream_sid": "MZfixture"}))
+                    self.assertEqual(socket.receive_json()["source"], "platform_receipt")
+                submitted.assert_awaited_once_with("no_action", {"call_id": "carrier-fixture", "reason": "out_of_scope"})
+                ticket = self.ticket(client)
+                with client.websocket_connect("/ws/browser", subprotocols=["v2-voice", "ticket." + ticket["ticket"]],
+                                              headers=self.origin) as socket:
+                    socket.send_json(self.handshake(ticket))
+                    self.assertEqual(socket.receive_json()["event"], "ready")
+                    self.assertEqual(socket.receive_json()["source"], "simulation")
+                self.assertEqual(submitted.await_count, 1)
 
     def test_paid_sessions_are_rejected_but_offline_fixture_still_runs(self):
         with TestClient(create_app(replace(self.config, allow_paid=False))) as client:
@@ -174,6 +197,19 @@ class OperatorAPITests(unittest.TestCase):
                                    content=b" " * 70000)
             self.assertEqual(response.status_code, 413)
             self.assertEqual(client.get("/health").headers["x-content-type-options"], "nosniff")
+
+    def test_text_collection_uses_the_controller_turn_limit(self):
+        result = TurnDecision(language="en", operations=[Operation(op="ask", question="identity")])
+        with patch.object(VercelInterpreter, "decide", AsyncMock(return_value=result)), TestClient(create_app(self.config)) as client:
+            run_id = client.post("/api/sessions/text", headers=self.headers, json={"language": "en"}).json()["run_id"]
+            session = client.app.state.text_sessions[run_id]
+            session.controller.state.turn = 20
+            response = client.post(f"/api/sessions/{run_id}/turn", headers=self.headers, json={"text": "Hello"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["state"]["turn"], 21)
+            session.controller.state.turn = MAX_CALL_TURNS
+            self.assertEqual(client.post(f"/api/sessions/{run_id}/turn", headers=self.headers,
+                                         json={"text": "Hello"}).status_code, 409)
 
     def test_busy_text_session_is_not_cancelled_or_reentered(self):
         with TestClient(create_app(self.config)) as client:

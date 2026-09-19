@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+MAX_CALL_TURNS = 60
+
 Language = Literal["en", "es", "ca"]
 Action = Literal["book", "cancel", "reschedule", "register", "no_action", "escalate"]
 Mode = Literal["simulation", "practice", "live"]
@@ -34,6 +36,38 @@ class Registration(Model):
     insurer: str = Field(min_length=1, max_length=80)
 
 
+class RegistrationFields(Model):
+    given_name: str | None = Field(default=None, max_length=100)
+    first_surname: str | None = Field(default=None, max_length=100)
+    second_surname: str | None = Field(default=None, max_length=100)
+    national_id: str | None = Field(default=None, max_length=32)
+    date_of_birth: str | None = Field(default=None, max_length=10)
+    phone: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=254)
+    insurer: str | None = Field(default=None, max_length=80)
+
+
+class SchedulingCriteria(Model):
+    specialty_id: Literal["general_practice", "paediatrics", "dermatology", "orthopaedics",
+                          "gynaecology", "physiotherapy"] | None = None
+    when: str | None = Field(default=None, max_length=250)
+    doctor_name: str | None = Field(default=None, max_length=100)
+    location_id: Literal["centro", "norte", "sur"] | None = None
+    appointment_id: Identifier | None = None
+    appointment_when: str | None = Field(default=None, max_length=250)
+    appointment_doctor_name: str | None = Field(default=None, max_length=100)
+    appointment_location_id: Literal["centro", "norte", "sur"] | None = None
+    part_of_day: Literal["morning", "afternoon"] | None = None
+    time_of_day: Annotated[str, Field(pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")] | None = None
+    appointment_time: Annotated[str, Field(pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")] | None = None
+    insurers: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(default_factory=list, max_length=5)
+    clinician_language: Language | None = None
+
+    def updates(self) -> dict:
+        return {key: value for key, value in self.model_dump(exclude_none=True, exclude_unset=True).items()
+                if key != "insurers" or value}
+
+
 class Operation(Model):
     op: Literal["create", "identify", "prepare", "confirm", "refuse", "escalate", "facts", "ask", "finish"]
     question: Literal["identity", "appointment", "registration_identity", "registration_contact", "confirm", "clarify"] | None = None
@@ -49,6 +83,11 @@ class Operation(Model):
     location_id: Literal["centro", "norte", "sur"] | None = None
     appointment_id: str | None = Field(default=None, max_length=80)
     registration: Registration | None = None
+    registration_fields: RegistrationFields | None = None
+    criteria: SchedulingCriteria | None = None
+    clear_fields: list[Literal["specialty_id", "when", "doctor_name", "location_id", "appointment_id",
+                               "appointment_when", "appointment_doctor_name", "appointment_location_id",
+                               "part_of_day", "time_of_day", "appointment_time", "insurers", "clinician_language"]] = Field(default_factory=list, max_length=13)
     option: int | None = Field(default=None, ge=1, le=10)
     offer_revision: int | None = Field(default=None, ge=1)
     reason: str | None = Field(default=None, max_length=80)
@@ -76,6 +115,13 @@ class Intent(Model):
     status: Literal["collecting", "awaiting_confirmation", "completed", "blocked"] = "collecting"
     patient: dict | None = None
     identity_inputs: dict = Field(default_factory=dict)
+    identity_status: Literal["partial", "verified", "not_found", "ambiguous", "invalid"] = "partial"
+    criteria: SchedulingCriteria = Field(default_factory=SchedulingCriteria)
+    registration_fields: RegistrationFields = Field(default_factory=RegistrationFields)
+    missing_fields: list[str] = Field(default_factory=list)
+    validation_errors: dict[str, str] = Field(default_factory=dict)
+    choices: list[dict] = Field(default_factory=list)
+    submission_uncertain: bool = False
     revision: int = 0
     offers: list[Offer] = Field(default_factory=list)
     blocking_reason: str | None = None

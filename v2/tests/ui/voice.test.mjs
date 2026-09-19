@@ -1,5 +1,3 @@
-// Synthetic codec and mocked browser lifecycle tests only. No microphone, paid
-// providers, network transport, caller playback or official score is certified.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {encodeMuLaw, decodeMuLaw, StreamingResampler, MuLawFramer, bytesToBase64, base64ToSamples,

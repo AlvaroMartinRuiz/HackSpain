@@ -20,6 +20,7 @@ When information is missing, use ask with the appropriate question: identity, ap
 Avoid asking for information already in the recent dialogue, identity_fields, identity_collected or carried fields.
 Verified identities do not need to be collected again. Carried criteria, constraints and registration fields remain valid until corrected.
 When supported by the schema, collect partial registration_fields and criteria; use clear_fields only for an explicit correction.
+Null fields and an empty insurers list preserve collected criteria. To remove an insurance constraint explicitly, include insurers in clear_fields.
 Use appointment_when, appointment_doctor_name and appointment_location_id for the existing appointment, not the requested new slot.
 Use missing_fields, validation_errors and choices to ask a focused clarification. Never retry or claim success for submission_uncertain.
 Use prepare to read registration details back before confirmation.

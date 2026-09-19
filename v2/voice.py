@@ -538,8 +538,13 @@ async def run_voice(socket, stream_sid: str, controller: CallController, config:
 
             @worker.event_handler("on_pipeline_started")
             async def started(_worker, _frame):
-                await graph.speak(Reply(text=TEXT[controller.state.language]["hello"], language=controller.state.language,
-                                        epoch=controller.epoch))
+                if controller.state.turn or controller.pending_reply is not None:
+                    return
+                greeting = Reply(text=TEXT[controller.state.language]["hello"], language=controller.state.language,
+                                 epoch=controller.epoch)
+                controller.pending_reply = greeting
+                controller.store.event(controller.state.run_id, "response_planned", {**greeting.model_dump(), "elapsed_ms": 0})
+                await graph.speak(greeting)
 
             @worker.event_handler("on_pipeline_error")
             async def pipeline_error(_worker, frame):

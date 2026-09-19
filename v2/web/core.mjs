@@ -1,4 +1,3 @@
-// Shared, DOM-independent state and evidence helpers. No credentials are persisted.
 export class ApiError extends Error {
   constructor(status, message) { super(message); this.name = 'ApiError'; this.status = status; }
 }
@@ -41,7 +40,6 @@ export class OperatorAPI {
         signal: controller.signal, cache: 'no-store', credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer'});
       if (generation !== this.#generation) throw new ApiError(0, 'Request cancelled.');
       if (!response.ok) {
-        // Never echo provider bodies, credentials or validation payloads into the UI/logs.
         if (response.status === 401 && !publicRequest) { this.lock(); this.onUnauthorized(); }
         throw new ApiError(response.status, apiMessage(response.status));
       }
@@ -98,7 +96,6 @@ export function evidence(report = {}) {
       const payload = e.payload || {};
       const rows = Object.entries(payload).filter(([key, value]) => /(?:_ms|_seconds)$/.test(key) && Number.isFinite(value))
         .map(([key, value]) => ({stage: e.kind, sequence: e.sequence, key, value}));
-      // Pipecat's TTFB/processing metric value is measured in seconds, not ms.
       if (e.kind === 'pipeline_metric' && ['TTFBMetricsData', 'ProcessingMetricsData'].includes(payload.metric) && Number.isFinite(payload.value)) {
         rows.push({stage: `${payload.processor || 'pipeline'} · ${payload.metric}`, sequence: e.sequence, key: 'duration_seconds', value: payload.value});
       }
@@ -115,7 +112,6 @@ export class RunHistory {
   merge(page, older = false) {
     if (!page || !Array.isArray(page.runs)) throw new ApiError(0, 'History response has an unexpected format.');
     for (const run of page.runs) if (validRunId(run.run_id)) this.runs.set(run.run_id, run);
-    // Refreshing page one must not jump over pages already loaded by the operator.
     if ((!older && !this.loadedOlder) || older) this.cursor = typeof page.next_cursor === 'string' ? page.next_cursor : null;
     if (older) this.loadedOlder = true;
   }
@@ -147,7 +143,6 @@ export class RecordingCache {
     this.entries.set(track, entry); return entry.promise;
   }
 }
-// DOM construction only: transcript/provider strings never become markup.
 export function textElement(doc, tag, text, className = '') {
   const node = doc.createElement(tag); node.textContent = String(text ?? '');
   if (className) node.className = className;

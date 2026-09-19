@@ -46,7 +46,7 @@ def main() -> int:
             r = client.get(f"{BASE_URL}/health")
             passed += check("GET /health (sin key)", r.status_code == 200, f"HTTP {r.status_code}")
         except Exception as e:
-            check("GET /health (sin key)", False, str(e))
+            check("GET /health (sin key)", False, type(e).__name__)
 
         # Health con key
         total += 1
@@ -54,7 +54,7 @@ def main() -> int:
             r = client.get(f"{BASE_URL}/health", headers={"X-Api-Key": API_KEY})
             passed += check("GET /health (con key)", r.status_code == 200, f"HTTP {r.status_code}")
         except Exception as e:
-            check("GET /health (con key)", False, str(e))
+            check("GET /health (con key)", False, type(e).__name__)
 
         # Directory — endpoint clave del hackathon
         total += 1
@@ -66,14 +66,14 @@ def main() -> int:
             )
             if r.status_code == 200:
                 data = r.json()
-                n = len(data) if isinstance(data, list) else len(data.get("patients", data))
+                n = len(data) if isinstance(data, list) else len(data.get("matches", []))
                 passed += check("GET /directory", True, f"HTTP 200, {n} resultado(s)")
             elif r.status_code == 403:
                 check("GET /directory", False, "403 Invalid API key — key inválida o host incorrecto")
             else:
-                check("GET /directory", False, f"HTTP {r.status_code}: {r.text[:120]}")
+                check("GET /directory", False, f"HTTP {r.status_code}")
         except Exception as e:
-            check("GET /directory", False, str(e))
+            check("GET /directory", False, type(e).__name__)
 
         # Catálogo clínica
         total += 1
@@ -84,9 +84,9 @@ def main() -> int:
             elif r.status_code == 403:
                 check("GET /clinic", False, "403 Invalid API key")
             else:
-                check("GET /clinic", False, f"HTTP {r.status_code}: {r.text[:120]}")
+                check("GET /clinic", False, f"HTTP {r.status_code}")
         except Exception as e:
-            check("GET /clinic", False, str(e))
+            check("GET /clinic", False, type(e).__name__)
 
     print()
     print(f"Resultado: {passed}/{total} checks passed")

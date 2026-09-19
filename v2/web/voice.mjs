@@ -1,6 +1,5 @@
 import {ApiError, validRunId} from './core.mjs';
 
-// ITU G.711 mu-law. PCM is normalized float at the browser boundary.
 export function encodeMuLaw(sample) {
   let pcm = Math.round(Math.max(-1, Math.min(1, Number.isFinite(sample) ? sample : 0)) * 32768);
   const sign = pcm < 0 ? 0x80 : 0;
@@ -14,8 +13,6 @@ export function decodeMuLaw(byte) {
   const magnitude = (((value & 0x0f) << 3) + 0x84) << ((value >> 4) & 7);
   return ((value & 0x80) ? 0x84 - magnitude : magnitude - 0x84) / 32768;
 }
-// A continuous, windowed-sinc low-pass resampler. It preserves fractional phase
-// across blocks (including 44.1 kHz) and filters above 4 kHz before downsampling.
 export class StreamingResampler {
   constructor(inputRate, outputRate = 8000) {
     if (!Number.isFinite(inputRate) || inputRate < outputRate || inputRate > 192000 || outputRate !== 8000) throw new Error('Unsupported microphone sample rate.');
@@ -84,7 +81,6 @@ export class PacedPlayback {
     this.sources.add(source);
     const at = Math.max(context.currentTime + 0.025, this.nextTime); this.nextTime = at + samples.length / 8000;
     source.start(at);
-    // Deliberately no Twilio mark/played acknowledgement: scheduling is not hearing.
   }
   clear() {
     this.generation++; this.nextTime = 0;
@@ -115,7 +111,6 @@ export class BrowserVoice {
       if (!env.isSecureContext || !env.navigator?.mediaDevices?.getUserMedia) throw new ApiError(0, 'Microphone calls need localhost or HTTPS and a browser with microphone support.');
       const AudioContext = env.AudioContext || env.webkitAudioContext;
       if (!AudioContext) throw new ApiError(0, 'Web Audio is unavailable in this browser. Try a current Chrome, Edge, Firefox or Safari.');
-      // Resume directly from the click gesture, before permission/network awaits.
       const context = new AudioContext(); this.context = context;
       const resume = context.resume().then(() => null, () => new ApiError(0, 'Audio playback could not start. Allow site audio and restart the call.'));
       const stream = await env.navigator.mediaDevices.getUserMedia({audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
@@ -130,7 +125,6 @@ export class BrowserVoice {
       if (!alive()) return;
       for (const track of stream.getTracks()) track.onended = () => { if (alive()) this.stop('Microphone disconnected. Call stopped.'); };
       this.status('Requesting a single-use voice ticket · paid providers…');
-      // Request only after the permission prompt, so the 30-second ticket cannot expire there.
       const ticket = await this.api.request('/api/voice/ticket', {method: 'POST', body: {language, mode}});
       if (!alive()) return;
       if (!ticket || typeof ticket.ticket !== 'string' || !/^[A-Za-z0-9._~-]+$/.test(ticket.ticket) ||
@@ -166,7 +160,6 @@ export class BrowserVoice {
             } else if (message.event === 'error') {
               throw new ApiError(0, 'The voice backend reported an error. Inspect the run errors and readiness before retrying.');
             }
-            // No acknowledgement of server mark events without an actual playback protocol.
           } catch (error) {
             const safe = error instanceof ApiError ? error : new ApiError(0, 'Invalid voice audio or transport message. Inspect backend diagnostics.');
             reject(safe); this.stop(safe.message);
@@ -215,7 +208,7 @@ export class BrowserVoice {
         this.processor = processor; processor.port.onmessage = event => capture(event.data);
         processor.onprocessorerror = () => { if (alive()) this.stop('Microphone audio processor failed. Restart the call.'); };
         source.connect(processor); processor.connect(silent); return;
-      } catch { if (!alive()) return; /* Older browsers/CSP: supported legacy fallback, never loop mic to speakers. */ }
+      } catch { if (!alive()) return; }
     }
     if (!alive()) return;
     if (!context.createScriptProcessor) throw new ApiError(0, 'Audio capture is not supported by this browser.');
@@ -226,7 +219,6 @@ export class BrowserVoice {
   stop(message = 'Call stopped. Microphone released.') {
     if (this.phase === 'idle') return;
     this.generation++; this.phase = 'idle'; clearTimeout(this.readyTimer);
-    // Settle a pending start even if stop occurs while waiting for WebSocket ready.
     this.connectReject?.(new ApiError(0, 'Voice start cancelled.')); this.connectReject = null;
     const socket = this.socket; this.socket = null;
     if (socket) {

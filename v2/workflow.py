@@ -12,7 +12,8 @@ from v2.domain.identity import normalize_text
 from v2.domain.triage import triage
 from v2.language import decide_language, should_apply_language
 from v2.clinic import Dispatcher
-from v2.models import CallState, Intent, Operation, Reply, TurnDecision
+from v2.models import MAX_CALL_TURNS, CallState, Identity, Intent, Operation, RegistrationFields, Reply, SchedulingCriteria, TurnDecision
+from v2.domain_rules import FIELDS, collection_prompt, confirmation_selection, explicit_decline, identity_problems, reason_text, requested_clock, resolve_request_when, unsupported_time_request
 from v2.store import RunStore
 
 TEXT = {
@@ -82,10 +83,7 @@ def urgent_language(text: str, current: str) -> str:
 
 
 def explicit_acceptance(text: str) -> bool:
-    folded = normalize_text(text)
-    if re.search(r"\b(no|not|wait|but|pero|per[oò]|instead|espera|except)\b", folded):
-        return False
-    return bool(re.match(r"^(yes|si|okay|ok|correct|confirmo|confirm|d'acord|perfecte|adelante|endavant)\b", folded))
+    return confirmation_selection(text)[0]
 
 
 class Flow(TypedDict):
@@ -118,6 +116,10 @@ class CallController:
         self.epoch += 1
         self.state.completion_requested = False
         self.pending_reply = None
+        if source != "caller_input":
+            for intent in self.state.intents.values():
+                for offer in intent.offers:
+                    offer.presented_turn = None
         if self.interpret_task is not None:
             self.interpret_task.cancel()
         self.store.event(self.state.run_id, "interruption" if source == "caller" else "response_cancelled",
@@ -129,9 +131,10 @@ class CallController:
         async with self.lock:
             if expected_epoch is not None and expected_epoch != self.epoch:
                 return None
+            self.pending_reply = None
             self.state.history = [*self.state.history[-7:], {"role": "caller", "text": text}]
             self.state.turn += 1
-            if self.state.turn > 20:
+            if self.state.turn > MAX_CALL_TURNS:
                 raise ValueError("call turn limit exceeded")
             self.state.completion_requested = False
             epoch = self.epoch
@@ -148,7 +151,8 @@ class CallController:
                 raise
             except Exception as exc:
                 self.store.event(self.state.run_id, "error", {"where": "turn", "error_type": type(exc).__name__})
-                result = {"reply": Reply(text=TEXT[self.state.language]["clarify"],
+                self.state.completion_requested = False
+                result = {"reply": Reply(text=reason_text(None, self.state.language),
                                          language=self.state.language, epoch=epoch)}
             finally:
                 self.interpret_task = None
@@ -188,23 +192,61 @@ class CallController:
         proposed_escalation = any(op.op == "escalate" and op.reason == "medical_emergency"
                                  and op.evidence.strip() and normalize_text(op.evidence) in normalize_text(text)
                                  for op in decision.operations)
+        if flow["epoch"] != self.epoch:
+            return {"reply": None}
         if red_flag or self.state.emergency or proposed_escalation:
             self.state.emergency = True
+            for pending in self.state.intents.values():
+                pending.offers = []
             intent = self.state.intents.setdefault("urgent", Intent(intent_id="urgent", action="escalate", subject="caller"))
-            receipt = await self.dispatcher.execute(self.state, intent, "escalate", {"reason": "medical_emergency"})
-            intent.receipts.append(receipt)
-            intent.status = "completed" if receipt["accepted"] else "blocked"
-            self.state.completion_requested = receipt["accepted"]
-            return {"reply": Reply(text=TEXT[language]["emergency"], language=language, epoch=flow["epoch"],
-                                    completion=receipt["accepted"])}
-        confirms = [op for op in decision.operations if op.op == "confirm"]
-        if len(confirms) > 1 and not re.search(r"\b(both|all|ambdues|totes|dos|dues)\b", normalize_text(text)):
-            raise ValueError("multiple confirmations need explicit collective acceptance")
-        for op in decision.operations:
+            if intent.action != "escalate":
+                raise ValueError("reserved emergency reference is already in use")
+            if intent.status != "completed" and not intent.submission_uncertain:
+                try:
+                    await self._submit(intent, "escalate", {"reason": "medical_emergency"})
+                except Exception:
+                    self.store.event(self.state.run_id, "emergency_receipt_unverified", {})
+            self.state.completion_requested = intent.status == "completed"
+            return {"reply": Reply(text=reason_text("medical_emergency", language), language=language, epoch=flow["epoch"],
+                                    completion=self.state.completion_requested)}
+        try:
+            consent = self._preflight(decision.operations, text)
+        except ValueError:
+            self.store.event(self.state.run_id, "guard_rejected", {"operation": "confirmation", "error_type": "ValueError"})
+            prepared_ids = [op.intent_id for op in decision.operations if op.op == "prepare"]
+            if len(set(prepared_ids)) != len(prepared_ids):
+                for intent_id in set(prepared_ids):
+                    intent = self.state.intents.get(intent_id)
+                    if intent and intent.status != "completed":
+                        intent.offers = []
+                        intent.revision += 1
+                        intent.status = "collecting"
+                return {"reply": Reply(text=TEXT[language]["clarify"], language=language, epoch=flow["epoch"])}
+            terminal_ids = {op.intent_id for op in decision.operations if op.op in {"confirm", "refuse", "escalate"}}
+            corrections = [op for op in decision.operations if op.op in {"identify", "prepare"} and op.intent_id in terminal_ids]
+            for correction in corrections:
+                if flow["epoch"] != self.epoch:
+                    break
+                self._evidence(correction, text)
+                line = await self._operate(correction, text, offered)
+                if line:
+                    lines.append(line)
+            return {"reply": Reply(text=" ".join(lines) or (self._next_prompt() if corrections else TEXT[language]["confirm"]),
+                                    language=language, epoch=flow["epoch"], offers=offered)}
+        operations = [op for op in decision.operations if op.op != "finish"]
+        finish = any(op.op == "finish" for op in decision.operations)
+        failed = False
+        for op in operations:
             if flow["epoch"] != self.epoch:
                 break
             try:
-                line = await self._operate(op, text, offered)
+                line = await self._operate(op, consent if op.op == "confirm" else text, offered)
+                if op.op == "identify" and op.intent_id in self.state.intents:
+                    identified = self.state.intents[op.intent_id]
+                    already_preparing = any(other.op == "prepare" and other.intent_id == op.intent_id for other in operations)
+                    ready = identified.action in {"cancel", "reschedule"} or identified.criteria.specialty_id or identified.criteria.doctor_name
+                    if ((identified.patient and ready) or identified.action == "register") and not already_preparing:
+                        line = await self._operate(Operation(op="prepare", intent_id=op.intent_id, evidence=op.evidence), text, offered)
                 if line:
                     lines.append(line)
             except (ValueError, PermissionError, RuntimeError) as exc:
@@ -212,10 +254,120 @@ class CallController:
                                                                        "error_type": type(exc).__name__})
                 lines.append(TEXT[language]["clarify"])
                 self.state.completion_requested = False
+                failed = True
                 break
-        return {"reply": Reply(text=" ".join(lines) or TEXT[language]["identity"], language=language,
+        if finish and not failed:
+            self.state.completion_requested = self.state.all_resolved
+            lines.append(TEXT[language]["done"] if self.state.all_resolved else self._next_prompt())
+        return {"reply": Reply(text=" ".join(lines) or self._next_prompt(), language=language,
                                 epoch=flow["epoch"], offers=offered,
-                                completion=self.state.completion_requested)}
+                                completion=self.state.completion_requested and self.state.all_resolved)}
+
+    def _preflight(self, operations: list[Operation], text: str) -> str:
+        for terminal in (op for op in operations if op.op in {"refuse", "escalate"}):
+            if any(op.intent_id == terminal.intent_id and op.op in {"identify", "prepare", "confirm"} for op in operations):
+                raise ValueError("a refusal cannot resolve a request being corrected in the same turn")
+        prepared_ids = [op.intent_id for op in operations if op.op == "prepare"]
+        if len(set(prepared_ids)) != len(prepared_ids):
+            raise ValueError("a request can only be prepared once in a turn")
+        confirms = [op for op in operations if op.op == "confirm"]
+        if not confirms:
+            return text
+        confirmed_ids = {op.intent_id for op in confirms}
+        if len(confirmed_ids) != len(confirms):
+            raise ValueError("an intent cannot be confirmed twice in one turn")
+        if any(op.intent_id in confirmed_ids and op.op in {"create", "identify", "prepare", "refuse", "escalate"} for op in operations):
+            raise ValueError("a correction cannot also confirm the old offer")
+        consent = text
+        additions = [op for op in operations if op.op == "create"]
+        if additions:
+            for op in additions:
+                self._evidence(op, text)
+                if not op.action or not op.subject or op.intent_id in self.state.intents:
+                    raise ValueError("invalid additional request")
+            parts = re.split(r"\.\s+(?:also|tambien|tambe)\b", normalize_text(text), maxsplit=1)
+            if len(parts) == 2:
+                consent = parts[0]
+        accepted, selection, collective = confirmation_selection(consent)
+        if not accepted or (len(confirms) > 1 and not collective):
+            raise ValueError("unambiguous acceptance is required")
+        presented = [(intent.intent_id, max((o.presented_turn or -1 for o in intent.offers), default=-1))
+                     for intent in self.state.intents.values() if intent.status == "awaiting_confirmation"]
+        latest = max((turn for _, turn in presented), default=-1)
+        latest_ids = {key for key, turn in presented if turn == latest}
+        if not confirmed_ids <= latest_ids:
+            raise ValueError("acceptance must refer to the most recently presented request")
+        if len(latest_ids) > 1 and not (collective and confirmed_ids == latest_ids):
+            raise ValueError("multiple presented requests need collective acceptance")
+        if collective and confirmed_ids != {key for key, turn in presented if turn >= 0}:
+            raise ValueError("collective acceptance must cover all presented requests")
+        for op in confirms:
+            self._evidence(op, text)
+            intent = self.state.intents.get(op.intent_id)
+            if intent is None:
+                raise ValueError("unknown intent")
+            self._confirmed_offer(intent, op, consent)
+        return consent
+
+    def _confirmed_offer(self, intent: Intent, op: Operation, text: str):
+        accepted, selected, _ = confirmation_selection(text)
+        if intent.status != "awaiting_confirmation" or intent.submission_uncertain:
+            raise ValueError("intent is not ready for confirmation")
+        if not accepted or op.offer_revision != intent.revision or not op.option:
+            raise ValueError("explicit acceptance of the current offer is required")
+        if op.option > len(intent.offers) or (selected is not None and selected != op.option):
+            raise ValueError("spoken selection must match the chosen option")
+        if len(intent.offers) > 1 and selected is None:
+            raise ValueError("multiple options require a spoken selection")
+        offer = intent.offers[op.option - 1]
+        if offer.revision != intent.revision or offer.action != intent.action:
+            raise ValueError("offer no longer matches this request")
+        if offer.presented_turn is None or offer.presented_turn >= self.state.turn:
+            raise ValueError("the offer has not been presented to the caller")
+        return offer
+
+    async def _submit(self, intent: Intent, action: str, payload: dict) -> dict:
+        if intent.submission_uncertain:
+            raise RuntimeError("previous action requires reconciliation")
+        try:
+            receipt = await self.dispatcher.execute(self.state, intent, action, payload)
+        except BaseException:
+            intent.submission_uncertain = True
+            intent.status = "blocked"
+            intent.offers = []
+            raise
+        if type(receipt.get("accepted")) is not bool:
+            intent.submission_uncertain = True
+            intent.status = "blocked"
+            intent.offers = []
+            raise RuntimeError("action outcome is unknown")
+        intent.receipts.append(receipt)
+        intent.status = "completed" if receipt["accepted"] else "blocked"
+        intent.offers = []
+        if receipt["accepted"] and action in {"cancel", "reschedule"}:
+            appointment = payload.get("appointment_id")
+            for other in self.state.intents.values():
+                if other.patient and intent.patient and other.patient.get("patient_id") == intent.patient.get("patient_id"):
+                    other.patient["upcoming"] = [row for row in other.patient.get("upcoming", []) if row.get("appointment_id") != appointment]
+                    if other is not intent and any(o.payload.get("appointment_id") == appointment for o in other.offers):
+                        other.offers = []
+                        other.revision += 1
+                        other.status = "collecting"
+        return receipt
+
+    def _next_prompt(self) -> str:
+        language = self.state.language
+        unresolved = [intent for intent in self.state.intents.values() if intent.status != "completed"]
+        if not unresolved:
+            return TEXT[language]["remaining"] if self.state.intents else TEXT[language]["identity"]
+        intent = unresolved[-1]
+        if intent.submission_uncertain:
+            return reason_text(None, language)
+        if intent.blocking_reason:
+            return reason_text(intent.blocking_reason, language)
+        if intent.offers:
+            return TEXT[language]["confirm"]
+        return collection_prompt(intent, language)
 
     async def _operate(self, op: Operation, text: str, offered: dict) -> str | None:
         language = self.state.language
@@ -223,7 +375,10 @@ class CallController:
             self.state.completion_requested = self.state.all_resolved
             return TEXT[language]["done" if self.state.all_resolved else "remaining"]
         if op.op == "ask":
-            return TEXT[language][op.question or "clarify"]
+            intent = self.state.intents.get(op.intent_id) if op.intent_id else None
+            if intent and (intent.missing_fields or intent.validation_errors):
+                return collection_prompt(intent, language)
+            return self._next_prompt() if self.state.intents else TEXT[language][op.question or "clarify"]
         if op.op == "facts":
             facts = self.clinic.facts(op.topic or "sites", language, op.location_id)
             self.store.event(self.state.run_id, "clinic_facts", facts)
@@ -231,33 +386,131 @@ class CallController:
         if not op.intent_id:
             raise ValueError("intent reference required")
         if op.op == "create":
-            if not op.action or not op.subject or op.intent_id in self.state.intents:
+            if not op.action or not op.subject or op.intent_id in self.state.intents or op.intent_id == "urgent":
                 raise ValueError("a new intent needs an action and a unique reference")
             self._evidence(op, text)
-            self.state.intents[op.intent_id] = Intent(intent_id=op.intent_id, action=op.action, subject=op.subject)
+            intent = Intent(intent_id=op.intent_id, action=op.action, subject=op.subject)
+            intent.missing_fields = list(RegistrationFields.model_fields) if op.action == "register" else ["name", "date_of_birth"]
+            self.state.intents[op.intent_id] = intent
             return None
         intent = self.state.intents.get(op.intent_id)
         if intent is None or intent.status == "completed":
             raise ValueError("unknown or already resolved intent")
+        if intent.submission_uncertain:
+            return reason_text(None, language)
         if op.op == "identify":
             self._evidence(op, text)
             if op.identity is None:
                 raise ValueError("identity fields required")
             if intent.offers:
                 intent.revision += 1
-            intent.offers = []
-            intent.identity_inputs = op.identity.model_dump(exclude_none=True)
-            intent.patient = await self.clinic.identify(op.identity)
+            intent.offers, intent.choices = [], []
+            offered.pop(intent.intent_id, None)
+            patch = op.identity.model_dump(exclude_none=True)
+            previous = intent.identity_inputs
+            if patch.get("name") and previous.get("name") and normalize_text(patch["name"]) != normalize_text(previous["name"]):
+                previous = {}
+                intent.criteria = intent.criteria.model_copy(update={"appointment_id": None, "appointment_when": None,
+                                                                      "appointment_doctor_name": None, "appointment_location_id": None,
+                                                                      "appointment_time": None})
+                intent.registration_fields = RegistrationFields()
+            intent.identity_inputs = {**previous, **patch}
+            intent.patient = None
+            intent.blocking_reason = None
             intent.status = "collecting"
-            return None if intent.patient else TEXT[language]["identity"]
+            if intent.action == "register":
+                fields = intent.registration_fields.model_dump(exclude_none=True)
+                fields.update({key: value for key, value in patch.items() if key in {"date_of_birth", "national_id", "phone"}})
+                intent.registration_fields = RegistrationFields(**fields)
+                intent.identity_status = "partial"
+                return None
+            intent.missing_fields, intent.validation_errors = identity_problems(intent.identity_inputs, self.state.reference_time.date())
+            if intent.missing_fields or intent.validation_errors:
+                intent.identity_status = "invalid" if intent.validation_errors else "partial"
+                return None
+            identity = Identity(**intent.identity_inputs)
+            if hasattr(self.clinic, "identify_result"):
+                result = await self.clinic.identify_result(identity, self.state.reference_time.date())
+                intent.patient = result["patient"]
+                intent.identity_status = result["status"]
+                intent.missing_fields = result.get("missing_fields", [])
+                intent.validation_errors = result.get("validation_errors", {})
+            else:
+                intent.patient = await self.clinic.identify(identity)
+                intent.identity_status = "verified" if intent.patient else "not_found"
+            if intent.patient is not None:
+                intent.patient = dict(intent.patient)
+                intent.subject = intent.patient.get("full_name") or intent.identity_inputs.get("name") or intent.subject
+                intent.missing_fields = ["appointment_id"] if intent.action in {"cancel", "reschedule"} else ["specialty_id"]
+            elif intent.identity_status == "not_found":
+                intent.blocking_reason = "patient_not_found"
+            return None
         if op.op == "prepare":
             self._evidence(op, text)
             intent.revision += 1
             intent.offers = []
-            intent.offers, intent.blocking_reason = await self.clinic.prepare(self.state, intent, op)
-            intent.status = "awaiting_confirmation" if intent.offers else "blocked"
+            intent.blocking_reason = None
+            intent.status = "collecting"
+            offered.pop(intent.intent_id, None)
+            values = intent.criteria.model_dump()
+            defaults = SchedulingCriteria().model_dump()
+            for key in op.clear_fields:
+                values[key] = defaults[key]
+            previous_when = values["when"]
+            previous_spec = resolve_request_when(previous_when, self.state.reference_time)
+            if "part_of_day" in op.clear_fields or "time_of_day" in op.clear_fields:
+                values["when"] = previous_spec.target_date.isoformat() if previous_spec.target_date else None
+            if op.criteria:
+                known_plans = {normalize_text(value).replace("_", " ") for value in intent.criteria.insurers}
+                for insurer in op.criteria.insurers:
+                    named = normalize_text(insurer).replace("_", " ")
+                    if named not in known_plans and named not in normalize_text(text).replace("_", " "):
+                        intent.validation_errors = {"insurers": "caller_must_name_plan"}
+                        return collection_prompt(intent, language)
+                values.update(op.criteria.updates())
+            for key in ("specialty_id", "when", "doctor_name", "location_id", "appointment_id"):
+                if getattr(op, key) is not None:
+                    values[key] = getattr(op, key)
+            changed_when = op.when or (op.criteria.when if op.criteria else None)
+            if changed_when:
+                if unsupported_time_request(changed_when):
+                    intent.validation_errors = {"when": "unsupported_window"}
+                    return collection_prompt(intent, language)
+                changed_spec = resolve_request_when(changed_when, self.state.reference_time)
+                clock = requested_clock(changed_when)
+                if changed_spec.part_of_day:
+                    values["part_of_day"] = changed_spec.part_of_day
+                    if not clock and not (op.criteria and op.criteria.time_of_day):
+                        values["time_of_day"] = None
+                elif "part_of_day" not in op.clear_fields and values["part_of_day"] is None:
+                    values["part_of_day"] = previous_spec.part_of_day
+                if clock:
+                    values["time_of_day"] = clock
+                elif not changed_spec.part_of_day and "time_of_day" not in op.clear_fields and values["time_of_day"] is None:
+                    values["time_of_day"] = requested_clock(previous_when)
+                if (changed_spec.part_of_day or clock) and changed_spec.target_date is None and previous_spec.target_date:
+                    values["when"] = previous_spec.target_date.isoformat()
+            intent.criteria = SchedulingCriteria(**values)
+            fields = intent.registration_fields.model_dump(exclude_none=True)
+            for patch in (op.registration, op.registration_fields):
+                if patch:
+                    fields.update(patch.model_dump(exclude_none=True))
+            intent.registration_fields = RegistrationFields(**fields)
+            merged = op.model_copy(update={key: values[key] for key in ("specialty_id", "when", "doctor_name", "location_id", "appointment_id")})
+            merged.criteria = intent.criteria
+            merged.registration_fields = intent.registration_fields
+            if intent.action != "register" and intent.patient is None:
+                if intent.identity_status == "not_found":
+                    intent.blocking_reason = "patient_not_found"
+                return reason_text(intent.blocking_reason, language) if intent.blocking_reason else collection_prompt(intent, language)
+            intent.offers, intent.blocking_reason = await self.clinic.prepare(self.state, intent, merged)
+            intent.status = "awaiting_confirmation" if intent.offers else "blocked" if intent.blocking_reason else "collecting"
             if not intent.offers:
-                return TEXT[language]["empty"] if intent.blocking_reason else TEXT[language]["clarify"]
+                return reason_text(intent.blocking_reason, language) if intent.blocking_reason else collection_prompt(intent, language)
+            if any(offer.revision != intent.revision or offer.action != intent.action or offer.presented_turn is not None for offer in intent.offers):
+                intent.offers = []
+                intent.status = "blocked"
+                raise ValueError("clinic produced an invalid offer")
             offered[intent.intent_id] = intent.revision
             self.store.event(self.state.run_id, "offers_prepared", {
                 "intent_id": intent.intent_id, "revision": intent.revision,
@@ -265,28 +518,21 @@ class CallController:
             })
             return " ".join(self._describe_offer(intent, offer, index) for index, offer in enumerate(intent.offers, 1))
         if op.op == "confirm":
+            offer = self._confirmed_offer(intent, op, text)
+            receipt = await self._submit(intent, offer.action, offer.payload)
+            return TEXT[language]["received" if self.state.mode == "live" else "simulation"] if receipt["accepted"] else reason_text(None, language)
+        if op.op in {"refuse", "escalate"}:
             self._evidence(op, text)
-            if not explicit_acceptance(text) or op.offer_revision != intent.revision or not op.option:
-                raise ValueError("explicit acceptance of the current offer is required")
-            if op.option > len(intent.offers):
-                raise ValueError("unknown option")
-            offer = intent.offers[op.option - 1]
-            if offer.presented_turn is None or offer.presented_turn >= self.state.turn:
-                raise ValueError("the offer has not been presented to the caller")
-            receipt = await self.dispatcher.execute(self.state, intent, offer.action, offer.payload)
-            intent.receipts.append(receipt)
-            intent.status = "completed" if receipt["accepted"] else "blocked"
-            return TEXT[language]["received" if self.state.mode == "live" else "simulation"] if receipt["accepted"] else TEXT[language]["clarify"]
-        if op.op == "refuse":
             reason = intent.blocking_reason
-            if intent.action == "no_action" and op.reason == "out_of_scope":
+            if intent.action in {"no_action", "escalate"} and op.reason == "out_of_scope":
                 reason = "out_of_scope"
-            if not reason or (op.reason and op.reason != reason):
-                raise ValueError("a refusal needs a clinic-derived reason")
-            receipt = await self.dispatcher.execute(self.state, intent, "no_action", {"reason": reason})
-            intent.receipts.append(receipt)
-            intent.status = "completed" if receipt["accepted"] else "blocked"
-            return TEXT[language]["empty"]
+            if not reason or (op.reason and op.reason != reason) or intent.offers:
+                raise ValueError("a refusal needs a clinic-derived reason and no pending offer")
+            if op.op == "refuse" and reason != "out_of_scope" and not explicit_decline(text):
+                return reason_text(reason, language)
+            action = "escalate" if op.op == "escalate" else "no_action"
+            receipt = await self._submit(intent, action, {"reason": reason})
+            return reason_text(reason if receipt["accepted"] else None, language)
         raise ValueError("operation not allowed in this state")
 
     @staticmethod
@@ -298,14 +544,24 @@ class CallController:
         d = offer.display
         language = self.state.language
         if intent.action == "register":
-            values = ", ".join(str(v) for v in d.values())
+            values = ", ".join(f"{FIELDS[language].get(key, key)}: {value}" for key, value in d.items())
         else:
             values = ", ".join(str(d.get(key, "")) for key in ("patient", "doctor", "site", "when"))
         verb = {"en": {"book": "Book", "cancel": "Cancel", "reschedule": "Move", "register": "Register"},
                 "es": {"book": "Reservar", "cancel": "Cancelar", "reschedule": "Cambiar", "register": "Registrar"},
                 "ca": {"book": "Reservar", "cancel": "Cancel·lar", "reschedule": "Canviar", "register": "Registrar"}}[language]
         prefix = {"en": "Option", "es": "Opción", "ca": "Opció"}[language]
-        return f"{prefix} {option}: {verb[intent.action]} {values}. {TEXT[language]['confirm']}"
+        explanation = ""
+        if d.get("alternative"):
+            label = {"en": "Alternative, not the requested date or time", "es": "Alternativa, no es la fecha u hora solicitada",
+                     "ca": "Alternativa, no és la data o hora sol·licitada"}[language]
+            explanation = reason_text(d.get("alternative_reason") or "no_availability", language) + " " + label + ". "
+        if d.get("previous"):
+            old = ", ".join(str(d["previous"].get(key) or "") for key in ("doctor", "site", "when"))
+            values = {"en": f"from {old} to {values}", "es": f"de {old} a {values}", "ca": f"de {old} a {values}"}[language]
+        if d.get("policy"):
+            values += {"en": ", using plan ", "es": ", con el seguro ", "ca": ", amb l'assegurança "}[language] + d["policy"]
+        return f"{explanation}{prefix} {option}: {verb[intent.action]} {values}. {TEXT[language]['confirm']}"
 
     def presented(self, reply: Reply, *, interrupted: bool = False):
         if interrupted or reply.epoch != self.epoch or reply != self.pending_reply:

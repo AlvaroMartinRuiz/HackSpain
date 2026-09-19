@@ -83,6 +83,9 @@ async function refreshHealth() {
       : 'Voice needs configuration before use. Offline fixtures do not need voice providers.';
     el('missing').replaceChildren(...(Array.isArray(health.missing) ? health.missing : []).map(item => node('li', `Missing: ${typeof item === 'string' ? item : pretty(item)}`)));
     el('health-json').textContent = pretty(health);
+    el('execution-mode').textContent = health.live_cutover_enabled
+      ? 'Live carrier mode is configured. Browser and text rehearsal never submit to Prosper.'
+      : 'Simulation and read-only practice. Live carrier submissions are disabled.';
   } catch {
     health = null; el('connection').textContent = 'Backend unavailable'; el('connection').className = 'pill bad';
     el('backend-status').textContent = 'Unavailable'; el('voice-ready').textContent = 'Unknown';
@@ -122,7 +125,6 @@ function renderHistory() {
 function acceptReport(report) {
   if (!report || !validRunId(report.run_id)) throw new ApiError(0, 'The server returned an invalid run report.');
   const old = reports.get(report.run_id);
-  // A slow poll must not overwrite a newer turn response with an older transcript.
   if (old && (old.events?.at(-1)?.sequence || old.events?.length || 0) > (report.events?.at(-1)?.sequence || report.events?.length || 0)) return old;
   reports.set(report.run_id, report);
   return report;
@@ -246,7 +248,6 @@ async function startText() {
 }
 function renderSessionReport(report) {
   renderTranscript(el('talk-transcript'), report);
-  // The contract supplies a reply even if a server snapshot has not yet persisted its event.
   if (report.reply?.text && !transcriptRows(report).some(row => row.role === 'agent' && row.text === report.reply.text)) {
     const box = node('article', '', 'turn agent'); box.append(node('strong', 'Agent · text reply'), node('p', report.reply.text)); el('talk-transcript').append(box);
   }

@@ -1,5 +1,3 @@
-// Fixed-size transferable batches. The graph's output is silence: never monitor
-// the local microphone back into the speakers. Resampling uses the real context rate.
 class V2Microphone extends AudioWorkletProcessor {
   constructor() { super(); this.batch = new Float32Array(512); this.used = 0; }
   process(inputs, outputs) {

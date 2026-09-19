@@ -1,4 +1,3 @@
-// Offline only. Mocked HTTP is not provider or official acceptance evidence.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {OperatorAPI, ApiError, apiMessage, RunHistory, RecordingCache, validRunId, runPath, budgetView,

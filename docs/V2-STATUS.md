@@ -1,47 +1,48 @@
 # V2 delivery status
 
-The status board on `feat/voice-v2` is authoritative. Copies on task branches are snapshots. Only the coordinator edits this board; lane owners report through their draft PRs.
+The status board on `feat/voice-v2` is authoritative. Copies on task branches are snapshots. Only the coordinator edits this board.
 
 ## Current state
 
-- Priority: functional product with stock voices. Voice cloning is last.
-- Integration branch: `feat/voice-v2`.
-- Code baseline: `72df603`.
-- Active implementation launch revision: `b32caed`. Five isolated agent worktrees were created from this status-only successor to `f41167e`; the runtime baseline is unchanged.
-- Coordination plan: [V2-PARALLEL-WORK.md](V2-PARALLEL-WORK.md).
-- Assignment mode: five parallel implementation agents with isolated worktrees; coordinator owns integration and serial paid validation. The user explicitly requested removal of v1 and code delivery without deployment.
-- V2 is now the sole application. Shared domain/client/audio utilities have been migrated and v1 removed in `df00253`. Operator text and browser voice APIs, the dashboard, provider adapters and persistent evaluation/history are integrated. Simulation/practice remain the defaults; live carrier operation requires explicit submission and release-approval flags. No deployment, paid provider acceptance or scored submission has occurred.
-- Provider credentials were supplied separately to the coordinator. Values do not belong in this repository or lane briefs. Real provider/deployment checks are still required; gateway access is not equivalent to Vercel deployment access.
-- API spend from this checkpointing/planning work: $0. Teammates' unrelated account activity is not measured here. Total previously authorized effort budget remains $30.
+- V2 is the sole application. The user explicitly approved v1 deletion; shared rules, client, codecs, language helpers and design assets were migrated before removal.
+- Five isolated implementation lanes launched from `b32caed` and are integrated. Background agents could edit but their shell commands were denied, so the coordinator ran verification, commits and pushes.
+- Delivery scope is CODE ONLY. No remote deployment, endpoint switch or scored submission was performed.
+- Stock voice pipeline: Pipecat + Deepgram Nova-3 + Cartesia English/Spanish + ElevenLabs Catalan. LangGraph controls typed, independent request state. Vercel provides interpretation; Jev is a separate optional assessment adapter.
+- Operator dashboard supports history, transcripts, receipts, errors/timings, protected audio, offline fixtures, natural text sessions and origin-bound, single-use-ticket browser voice.
+- Simulation/practice remain the defaults. Live carrier operation requires both explicit submission and release approval. Browser/text rehearsal never inherits the live action sink.
+- The user asked to stop expanding unit tests and prioritize delivery. Final verification is compilation, all 18 offline outcome/language fixtures, and a real headless Chrome operator smoke at desktop/mobile widths. All passed without paid API calls.
+- Earlier verification checkpoints passed 181 assembled Python tests, 41 UI tests, 15 Jev tests, TypeScript checking, deterministic domain checks and `pip check`. That full test count predates the final small integration corrections; it is not a claim that the entire expanded suite was rerun afterward.
+- The real Prosper health, authenticated health, directory and clinic READ checks passed (4/4). No patient records were printed and no clinic action was submitted.
+- Paid API spend from this effort is $0. The existing shared effort allowance remains $30; unrelated teammates' usage is not measured here.
 
-## Work board
+## Integrated lanes
 
-| Lane | Owner | Branch | State | Next checkpoint |
-| --- | --- | --- | --- | --- |
-| A — Conversation/domain | Domain agent / coordinator verification | `v2/devin-domain` | Final verification | Incremental collection, six outcomes, corrections and confirmation tests |
-| B — Realtime voice | Voice agent / coordinator verification | `v2/devin-voice` | Integrated `bade0e0` | 30 offline voice/audio tests passed before integration |
-| C — Gateway/Jev | Gateway agent / coordinator verification | `v2/devin-gateway` | Integrated `7156e43` | 18 Python and 15 Jev tests plus TypeScript check passed |
-| D — Operator UI | Dashboard agent / coordinator verification | `v2/devin-dashboard` | Integrated `d0082d1` | 41 offline UI tests and coordinator-run real Chrome smoke passed |
-| E — Evals/data | Evaluation agent / coordinator verification | `v2/devin-evals` | Integrated `1a2083e` | 62 lane Python tests and 18 outcome/language fixtures passed |
-| F — Integration/release | Coordinator | `feat/voice-v2` | API/browser integration verified | 123 assembled Python tests; authenticated sessions, single-use tickets, terminal status and audio-finalization fixes |
-| Voice cloning | Deferred | Not assigned | After functional release | Owner recordings and explicit clone provisioning |
-
-## Checkpoint log
-
-| Checkpoint | Revision | Evidence | Push |
+| Lane | Branch | Lane checkpoint | Evidence |
 | --- | --- | --- | --- |
-| CP1 — Initial v2 laboratory | `72df603` | 33 v2 Python tests; 4 Jev tests; TypeScript checks; `pip check`; publishable-key-prefix/template checks | Pushed to `origin/feat/voice-v2` |
-| CP2 — Parallel work plan | `f41167e` | Ownership, handoff briefs, dependency order, budget and release gates | Pushed to `origin/feat/voice-v2`; frozen lane launch revision |
+| Conversation/domain | `v2/devin-domain` | `ac3e4d9` | 89 lane tests before integration; incremental collection, corrections, six outcomes and guarded confirmation |
+| Realtime voice | `v2/devin-voice` | `bade0e0` | 30 offline voice/audio tests; paced output, stale-generation rejection and complete-response tracking |
+| Gateway/Jev | `v2/devin-gateway` | `7156e43` | 18 Python and 15 Jev tests plus TypeScript checking |
+| Operator UI | `v2/devin-dashboard` | `d0082d1` | 41 UI tests plus coordinator-run real Chrome smoke |
+| Evals/data | `v2/devin-evals` | `1a2083e` | 62 lane tests and all 18 synthetic outcome/language fixtures |
+| API/auth/integration | `feat/voice-v2` | `f98efc0` and final domain integration | Authenticated text sessions, browser tickets, protected evidence, standalone migration, final compatibility fixes |
 
-## Integration queue
+## Checkpoints
 
-Four tested lanes are integrated; the domain lane is finishing coordinator verification. The current assembled checkpoint passes 123 Python tests, 41 UI tests, 15 Jev tests with TypeScript checking, and a real headless Chrome smoke at desktop/mobile widths. The standalone migration passed all deterministic domain checks. Paid verification remains blocked on main-workspace credentials; Docker build verification is unavailable because Docker is not installed. No paid requests or deployments were made. Remaining integration order:
+| Checkpoint | Revision | Publication |
+| --- | --- | --- |
+| Initial laboratory | `72df603` | Pushed |
+| Parallel plan | `f41167e` | Pushed |
+| V2 independence and approved v1 removal | `df00253` | Pushed |
+| Operator/API/provider/voice/evaluation integration | `f98efc0` | Pushed |
+| Domain integration and final compatibility fixes | This checkpoint | Coordinator commits and pushes with this status update |
 
-1. A0/E0/F0 contract and fixture checkpoints.
-2. C gateway adapters and A workflow increments: validate functional text interaction.
-3. B voice adapter increments with the same validated workflow.
-4. D operator UI with E's persisted evidence and F's authenticated API.
-5. Coordinator-run provider probes and cross-lane release checks.
-6. Team review and explicit cutover decision; cloning afterward.
+## Remaining external gates
 
-A lane's passing unit tests do not automatically make the integration branch or live service ready. Summaries must state whether evidence is mocked, fixture-based, or provider-backed. No destructive data migration, live endpoint switch, secret publication or spending-limit increase is authorized by a lane assignment.
+1. Main-workspace `v2/.env` still needs `AI_GATEWAY_API_KEY`, `CARTESIA_API_KEY`, `V2_OPERATOR_TOKEN`, a verified `V2_CARTESIA_VOICE_ES`, and paid opt-in. Deepgram, ElevenLabs and Prosper credential names are already configured. Values must never enter Git or logs.
+2. Jev deployment is outside the authorized code-only scope. Its configured HTTPS endpoint and matching service token are still absent; the service code is included and verified offline.
+3. Real voice/model quality, language latency, carrier acceptance and paid end-to-end behavior remain unverified until the missing configuration is supplied. Socket-send observations are not playback acknowledgements or official grades.
+4. Docker is not installed on this machine, so the container build was not executed.
+5. Voice cloning, audio-model duels, a genuine independent holdout corpus and automatic improvement promotion remain outside this functional stock-voice delivery. Arbitrary date/time ranges ask for clarification rather than silently dropping constraints.
+6. Operator reconciliation is available in the store API for unresolved action outcomes; a reconciliation UI is not implemented. Do not blindly replay unresolved actions or reset the budget ledger.
+
+Keep code delivery, mocked/fixture evidence, provider-backed acceptance and official scoring distinct. No deployment or spending-limit increase is implied by these commits.

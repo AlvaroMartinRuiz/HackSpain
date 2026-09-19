@@ -25,7 +25,7 @@ from v2.clinic import ClinicBoundary, Dispatcher, FixtureClinic
 from v2.config import Config
 from v2.domain.catalog import Catalog
 from v2.evaluation import demo_request, metrics, rehearse
-from v2.models import CallState, Language, RehearsalRequest, Reply
+from v2.models import MAX_CALL_TURNS, CallState, Language, RehearsalRequest, Reply
 from v2.platform_api.client import PlatformClient
 from v2.providers import VercelInterpreter
 from v2.store import BudgetExceeded, RunStore
@@ -267,7 +267,7 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
             raise HTTPException(409, "a caller turn is still being processed")
         if not request.text.strip():
             raise HTTPException(422, "caller text must not be blank")
-        if session.controller.state.turn >= 20:
+        if session.controller.state.turn >= MAX_CALL_TURNS:
             raise HTTPException(409, "session turn limit reached")
         require_paid(mode=session.controller.state.mode)
         session.busy = True
