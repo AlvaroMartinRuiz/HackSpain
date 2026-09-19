@@ -158,7 +158,9 @@ class ElevenLabsSynthesizer(Synthesizer):
             "model_id": model,
             "voice_settings": {"stability": 0.4, "similarity_boost": 0.7, "speed": 1.0},
         }
-        if code in _SUPPORTED_ELEVENLABS_LANGUAGES:
+        # Named, not guessed: v3 conversational accepts "ca" (tested), and a
+        # short Catalan line is easy to mistake for Spanish.
+        if code in _SUPPORTED_ELEVENLABS_LANGUAGES or code == "ca":
             body["language_code"] = code
 
         async with self._client.stream("POST", path, params=params, json=body) as response:

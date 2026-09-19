@@ -6,6 +6,7 @@ out of these functions, never out of the conversation.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any, Optional
 
 from src.domain.engine import Slot
@@ -26,16 +27,26 @@ INSURANCE_REASONS = frozenset({
     "insurer_referral_required", "allowance_exhausted",
 })
 
+# The agent asking about another plan, in the languages it speaks. Matched on
+# normalised text (lowercase, no accents).
+_OTHER_PLAN_QUESTION = re.compile(
+    r"\b(other|another|second|different|additional)\b.{0,30}\b(insurance|insurer|plan|policy|cover)"
+    r"|\b(otr[oa]s?|segund[oa]|algun[oa]?|mas)\b.{0,30}\b(seguros?|polizas?|mutuas?|aseguradoras?|planes?)"
+    r"|\b(altr[ea]s?|segon[a]?|cap)\b.{0,30}\b(assegura\w*|mutu\w*|poliss\w*)"
+)
+
 SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
             "name": "lookup_patient",
             "description": (
-                "Search the clinic directory. Ask the caller's name if they have not said it, "
-                "or confirm a caller-id match in their language ('Am I speaking with [full name]?' / "
-                "'¿Hablo con [full name]?'). The caller id is a "
-                "lookup field, not a reason to skip that. A name search needs the given name plus "
+                "Search the clinic directory. Ask the caller's name if they have not said it. If "
+                "a caller-id lookup returned someone and the caller has not said a name, confirm "
+                "with the name this tool returned, in their language (e.g. 'Am I speaking with "
+                "Ella Smith?' / '¿Hablo con Ella Smith?'). Never say a name you have not been "
+                "given, and never a placeholder. The caller id is a lookup field, not a reason "
+                "to skip that. A name search needs the given name plus "
                 "at least one surname; a surname on its own is not enough. Fields are compared "
                 "exactly, so a misheard national id usually returns nobody — name plus date of "
                 "birth is what separates two people who share a name."
@@ -385,8 +396,17 @@ class ToolBox:
                 "ask_for": result["distinguishers"],
                 "guidance": "Several people match. Ask for one of `ask_for` before going further.",
             }
-        return {"found": 1, "match": result["matches"][0],
-                "guidance": "Confirm one more field with the caller, then open the chart."}
+        # Two fields matching is the confirmation; asking for a third costs a
+        # turn out of a three-minute call.
+        searched = [key for key in ("name", "national_id", "phone", "date_of_birth") if args.get(key)]
+        guidance = (
+            f"Matched on {' and '.join(searched)}, which confirms who this is. Do not ask for "
+            "another field; open the chart."
+            if len(searched) >= 2 else
+            "Only one field matched. Confirm one more with the caller (their name or date of "
+            "birth), then open the chart."
+        )
+        return {"found": 1, "match": result["matches"][0], "guidance": guidance}
 
     async def _tool_open_chart(self, args: dict[str, Any]) -> dict[str, Any]:
         patient_id = str(args.get("patient_id", "")).strip()
@@ -734,7 +754,7 @@ class ToolBox:
             return {
                 "registered": False,
                 "needs_confirmation": True,
-                "read_back": _read_back(fields),
+                "read_back": _read_back(fields, self.session.language),
                 "letter_inferred": letter_inferred,
                 "guidance": "Nothing is on file yet. Read these back in one turn: spell the given "
                             "name and both surnames, give the id digit by digit with its letter"
@@ -759,8 +779,10 @@ class ToolBox:
 
     async def _tool_end_without_booking(self, args: dict[str, Any]) -> dict[str, Any]:
         reason = self._clean_reason(args.get("reason"))
+        # The flag is the model's word; what the agent actually said on the call
+        # is what shows the question was asked.
         if (reason in INSURANCE_REASONS and not self.named_insurers
-                and not args.get("caller_has_no_other_plan")):
+                and not (args.get("caller_has_no_other_plan") and self._asked_about_other_plan())):
             await self.session.record("decision", {
                 "stage": "refusal_held", "reason": reason,
                 "why": "an insurance refusal waits until the caller is asked about a second plan",
@@ -846,6 +868,14 @@ class ToolBox:
                              "with the name from `known_plans`.",
         }
 
+    def _asked_about_other_plan(self) -> bool:
+        said = " ".join(
+            str(message.get("content") or "")
+            for message in self.session.agent.messages
+            if message.get("role") == "assistant"
+        )
+        return bool(_OTHER_PLAN_QUESTION.search(normalize_text(said)))
+
     def _known_appointment(self, appointment_id: str) -> bool:
         upcoming = self.patient_context.get("upcoming") or []
         return any(a.get("appointment_id") == appointment_id for a in upcoming)
@@ -885,14 +915,22 @@ def _spell(text: str) -> str:
     return "-".join(ch.upper() for ch in text if not ch.isspace())
 
 
-def _spell_email(email: str) -> str:
+# How the symbols in an address are said, per call language.
+_EMAIL_WORDS = {
+    "en": {"@": "at", ".": "dot", "_": "underscore", "-": "dash"},
+    "es": {"@": "arroba", ".": "punto", "_": "guion bajo", "-": "guion"},
+    "ca": {"@": "arrova", ".": "punt", "_": "guió baix", "-": "guió"},
+}
+
+
+def _spell_email(email: str, language: str = "en") -> str:
+    words = _EMAIL_WORDS.get((language or "")[:2], _EMAIL_WORDS["en"])
     local, _, domain = email.partition("@")
-    marks = {".": "dot", "_": "underscore", "-": "dash"}
-    spelled = " ".join(marks.get(ch, ch.upper()) for ch in local)
-    return f"{spelled} at {domain.replace('.', ' dot ')}"
+    spelled = " ".join(words.get(ch, ch.upper()) for ch in local)
+    return f"{spelled} {words['@']} {domain.replace('.', ' ' + words['.'] + ' ')}"
 
 
-def _read_back(fields: dict[str, Any]) -> dict[str, str]:
+def _read_back(fields: dict[str, Any], language: str = "en") -> dict[str, str]:
     return {
         "given_name": _spell(fields["given_name"]),
         "first_surname": _spell(fields["first_surname"]),
@@ -900,6 +938,6 @@ def _read_back(fields: dict[str, Any]) -> dict[str, str]:
         "national_id": " ".join(fields["national_id"]),
         "date_of_birth": fields["date_of_birth"],
         "phone": " ".join(fields["phone"]),
-        "email": _spell_email(fields["email"]),
+        "email": _spell_email(fields["email"], language),
         "insurer": fields["insurer"],
     }

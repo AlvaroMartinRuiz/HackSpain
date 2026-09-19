@@ -156,12 +156,21 @@ class SchedulingEngine:
             if parsed["valid"]:
                 national_id_clean = str(parsed["value"])
             elif parsed["letter_missing"]:
-                # A misheard digit derives a different, equally valid id, so a
-                # hit on this one still needs a second field to be trusted.
+                # A misheard digit derives a different, equally valid id, which
+                # can be someone else's. On its own it identifies nobody; next
+                # to a name or a date of birth the directory's exact filter on
+                # both is what rules the wrong person out.
+                if not (name or phone or date_of_birth):
+                    trace.append(
+                        f"national id {national_id!r} arrived without its letter and on its "
+                        "own; it needs a second field (name or date of birth) before searching"
+                    )
+                    return {"count": 0, "matches": [], "ambiguous": False, "trace": trace,
+                            "distinguishers": [], "needs_more": True, "letter_inferred": True}
                 national_id_clean = str(parsed["value"])
                 trace.append(
                     f"national id {national_id!r} arrived without its letter; searched as "
-                    f"{national_id_clean} (letter inferred, confirm another field)"
+                    f"{national_id_clean} together with the other fields"
                 )
             else:
                 trace.append(
