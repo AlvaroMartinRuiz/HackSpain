@@ -339,6 +339,30 @@ def spoken_when(value: str, language: str) -> str:
     return f"{name} {day} {month_name} at {clock}"
 
 
+def written_dates(text: str, language: str) -> str:
+    """Spell out "08/07/1962" the way the caller meant it, before anything interprets it.
+
+    Speech-to-text formats a dictated date as digits in the convention of the language it
+    heard: month first in English, day first in Spanish and Catalan. Left as digits, a model
+    reading it the other way round looks up the wrong date of birth.
+    """
+    def spell(match: re.Match) -> str:
+        first, second, year = int(match[1]), int(match[2]), int(match[3])
+        month_first = language == "en"
+        month, day = (first, second) if month_first else (second, first)
+        if month > 12 and day <= 12:
+            month, day = day, month
+        try:
+            date(year, month, day)
+        except ValueError:
+            return match[0]
+        names = _MONTHS.get(language, _MONTHS["en"])
+        if language == "en":
+            return f"{day} {names[month - 1]} {year}"
+        return f"{day} de {names[month - 1]} de {year}"
+    return re.sub(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\b", spell, text)
+
+
 def without_repeats(text: str) -> str:
     """Drop a sentence already said earlier in the same reply."""
     seen, kept = set(), []

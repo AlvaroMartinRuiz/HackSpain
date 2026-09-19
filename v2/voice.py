@@ -39,6 +39,8 @@ from starlette.websockets import WebSocketState
 from v2.codecs import pcm16_to_ulaw
 from v2.audio import MediaProtocolError, RecordedSocket, RunTape, parse_message
 from v2.config import Config
+from v2.domain_rules import written_dates
+from v2.language import decide_language
 from v2.models import Reply
 from v2.workflow import CallController, TEXT
 
@@ -212,6 +214,7 @@ class GraphProcessor(FrameProcessor):
             messages = frame.context.get_messages()
             text = next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")
             if isinstance(text, str) and text.strip() and not self.ending:
+                text = written_dates(text, decide_language(text, None, self.controller.state.language).code)
                 if not self.turn_started:
                     self.invalidate("caller_input")
                 self.turn_started = self.user_speaking = False
@@ -485,6 +488,8 @@ def voice_services(config: Config, http_session):
     if "ca" not in ELEVENLABS_MODEL_LANGUAGES.get(ca_model, ()):
         raise ValueError("Catalan requires an ElevenLabs model with explicit ca support")
     stt = DeepgramSTTService(api_key=config.deepgram_key, sample_rate=16000, mip_opt_out=True,
+                             # Without smart_format Spanish years come out as "1000 62"; its numeric dates are
+                             # made unambiguous before interpretation (see written_dates).
                              settings=DeepgramSTTService.Settings(model="nova-3", language="multi",
                                                                   numerals=True, smart_format=True))
     voices = {

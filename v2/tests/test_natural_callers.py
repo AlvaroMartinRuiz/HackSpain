@@ -95,6 +95,17 @@ class CompressedDecisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.state.intents["mine"].receipts), 1)
 
 
+class DictatedDateTests(unittest.TestCase):
+    def test_numeric_dates_are_spelled_in_the_convention_they_were_heard_in(self):
+        from v2.domain_rules import written_dates
+        # English speech-to-text wrote "the seventh of August 1962" as 08/07/1962 on a live call.
+        self.assertEqual(written_dates("born on the 08/07/1962.", "en"), "born on the 7 August 1962.")
+        self.assertEqual(written_dates("nací el 07/08/1962", "es"), "nací el 7 de agosto de 1962")
+        self.assertEqual(written_dates("born 25/12/1990", "en"), "born 25 December 1990")
+        self.assertEqual(written_dates("born 31/02/1990", "en"), "born 31/02/1990")
+        self.assertEqual(written_dates("no dates here", "en"), "no dates here")
+
+
 class PausingCallerTests(unittest.IsolatedAsyncioTestCase):
     """A caller who pauses mid-sentence reaches the controller as fragments; the voice
     pipeline cancels the unanswered one when the next fragment arrives."""

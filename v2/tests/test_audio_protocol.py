@@ -115,6 +115,16 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                 await wrapped.receive()
             self.assertEqual(tape.frames["inbound"], 25)
 
+    async def test_audio_queued_while_providers_connect_is_accepted_once(self):
+        with tempfile.TemporaryDirectory() as root:
+            tape = RunTape(Path(root), "provider-startup")
+            socket = SimpleNamespace(receive=AsyncMock(return_value={"type": "websocket.receive", "text": media(b"\xff" * 1600)}))
+            wrapped = RecordedSocket(socket, tape, accepted_at=time.monotonic())
+            await asyncio.sleep(0.6)  # the pipeline is still starting; nothing reads the socket
+            for _ in range(12):  # 2.4 s: the 0.6 s that queued plus most of the 2 s burst
+                await wrapped.receive()
+            self.assertEqual(tape.protocol_errors, 0)
+
     def test_mark_names_are_bounded_and_not_arbitrary_objects(self):
         for name in (None, {}, "x" * 129):
             with self.assertRaises(MediaProtocolError):
