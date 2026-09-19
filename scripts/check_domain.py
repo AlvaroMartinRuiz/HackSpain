@@ -185,6 +185,8 @@ def main() -> int:
         ("dentro de una semana", date(2026, 9, 26), None),
         ("first thing on Monday the twelfth of October", date(2026, 10, 12), "morning"),
         ("por la mañana", None, "morning"),
+        ("from two o'clock in the afternoon onwards", None, "afternoon"),
+        ("from two o'clock onwards", None, "afternoon"),
     ]
     for phrase, expected_date, expected_part in expectations:
         spec = resolve_when(phrase, now)

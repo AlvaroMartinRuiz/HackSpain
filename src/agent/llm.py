@@ -93,14 +93,15 @@ class LLMClient:
         body: dict[str, Any] = {
             "model": settings.llm_model,
             "messages": messages,
-            "temperature": settings.llm_temperature if temperature is None else temperature,
             "stream": True,
         }
+        if settings.llm_reasoning_effort:
+            body["reasoning_effort"] = settings.llm_reasoning_effort
+        else:
+            body["temperature"] = settings.llm_temperature if temperature is None else temperature
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
-        if settings.llm_reasoning_effort:
-            body["reasoning_effort"] = settings.llm_reasoning_effort
         return body
 
     async def stream(

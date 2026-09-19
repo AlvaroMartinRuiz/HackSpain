@@ -58,7 +58,9 @@ ORDINALS: dict[str, int] = {
 
 _FIRST_THING = r"(first thing|a primera hora|primera hora|lo m[aá]s temprano)"
 _MORNING = r"(morning|ma[nñ]ana|mat[ií]|por la ma[nñ]ana|de la ma[nñ]ana)"
-_AFTERNOON = r"(afternoon|tarde|por la tarde|de la tarde)"
+_AFTERNOON = r"(afternoon|tarde|por la tarde|de la tarde|"\
+             r"from two o'?clock|from 2 o'?clock|after two o'?clock|"\
+             r"a partir de las dos|desde las dos)"
 _SOONEST = r"(soonest|earliest|as soon as possible|asap|lo antes posible|cuanto antes|"\
            r"lo m[aá]s pronto|la m[aá]s pr[oó]xima|el primer hueco|primer hueco)"
 
