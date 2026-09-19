@@ -95,9 +95,9 @@ antes de entregarlo:
 
 ## Voz: Aura para practicar, ElevenLabs para puntuar
 
-El default en `.env` es ElevenLabs. Para ensayos y llamadas de práctica
-cambiadlo a Aura (`TTS_PROVIDER=deepgram`): misma clave que el transcriptor,
-µ-law 8 kHz, y no gasta los caracteres del plan Creator.
+El default es Aura (`TTS_PROVIDER=deepgram`): misma clave que el transcriptor,
+µ-law 8 kHz, y no gasta los caracteres del plan Creator. Dejadlo así para
+ensayos y llamadas de práctica.
 
 ElevenLabs es el plan Creator: **131.000 caracteres, unos dos Run All**. Cuando
 se acaba, la voz se cae y cada llamada muda es un caso nuestro. No la uséis

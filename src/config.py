@@ -99,7 +99,9 @@ class Settings:
     llm_extra_headers: dict = field(default_factory=lambda: _headers("LLM_EXTRA_HEADERS"))
 
     # Text to speech
-    tts_provider: str = field(default_factory=lambda: _env("TTS_PROVIDER", default="elevenlabs").lower())
+    # Aura is metered on the same key as the transcriber and costs a fraction of
+    # ElevenLabs, so it is the default; switch to elevenlabs for scored runs.
+    tts_provider: str = field(default_factory=lambda: _env("TTS_PROVIDER", default="deepgram").lower())
     deepgram_tts_model_es: str = field(
         default_factory=lambda: _env("DEEPGRAM_TTS_MODEL_ES", default="aura-2-silvia-es")
     )

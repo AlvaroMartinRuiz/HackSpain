@@ -210,11 +210,8 @@ class CallSession:
         self._frozen = True
         self._save_tape()
 
-        if self.transcriber is not None:
-            try:
-                await self.transcriber.finish()
-            except Exception:
-                pass
+        # STT is already closed: either on_stop drained it, or _recover_last_turn
+        # did. A third finish() only retries CloseStream on a dead socket.
         if self.synthesizer is not None:
             await self.synthesizer.aclose()
         await self.client.aclose()

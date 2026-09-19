@@ -375,11 +375,13 @@ class ToolBox:
         if self.patient is not None and self.patient.get("patient_id") != patient_id:
             # A second patient on the same call inherits nothing from the first:
             # not their options, not a plan they mentioned, not why they were
-            # refused. All three would otherwise bill or book the wrong person.
+            # refused, and not which doctors a tool already resolved. All four
+            # would otherwise bill or book the wrong person.
             self.options = {}
             self.options_for = None
             self.named_insurers = []
             self.last_reason = None
+            self.resolved_providers.clear()
 
         self.patient = found
         self.patient_context = context
