@@ -230,6 +230,8 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
             "El teléfono es seis cuatro cinco, once, veintidós, treinta y tres.",
             "El correo es lucia punto ferrer arroba gmail punto com.",
             "Tengo Sanitas.",
+            # The read-back comes before anything is sent, and it needs an answer.
+            "Sí, está todo correcto.",
             "No, cita no quiero todavía, solo darme de alta. Gracias.",
         ],
         verify=verify_register,
