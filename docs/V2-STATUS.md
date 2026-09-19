@@ -7,7 +7,7 @@ The status board on `feat/voice-v2` is authoritative. Copies on task branches ar
 - Priority: functional product with stock voices. Voice cloning is last.
 - Integration branch: `feat/voice-v2`.
 - Code baseline: `72df603`.
-- Parallel launch revision: awaiting publication of the task-plan checkpoint; do not fork from a moving branch until the coordinator records the launch SHA here.
+- Parallel launch revision: `f41167e`. Create every initial lane branch from this exact commit; it includes the tested code baseline, task briefs and collaboration rules. The newer status-board commit does not change runtime code.
 - Coordination plan: [V2-PARALLEL-WORK.md](V2-PARALLEL-WORK.md).
 - Assignment mode: undecided (teammates, subagents, or mixed). No subagents launched by this planning work.
 - V2 remains a lab/practice implementation; no live cutover or scored submission has been enabled.
@@ -23,7 +23,7 @@ The status board on `feat/voice-v2` is authoritative. Copies on task branches ar
 | C — Gateway/Jev | Unclaimed | `v2/gateway` | Ready for offline work | Gateway/rubric tests; request coordinated live smoke window |
 | D — Operator UI | Unclaimed | `v2/dashboard` | Ready against current API/mock DTOs | Reuse UI and list backend/ticket contract requirements |
 | E — Evals/data | Unclaimed | `v2/evals` | Ready for offline work | Outcome fixtures, metric definitions and run-summary contract |
-| F — Integration/release | Coordinator (Devin until reassigned) | `feat/voice-v2` | Preparing delegation | Freeze launch SHA, collect owners, schedule dependency checkpoints |
+| F — Integration/release | Coordinator (Devin until reassigned) | `feat/voice-v2` | Launch revision frozen; ready to assign | Collect owners, approve contract deltas, schedule dependency checkpoints |
 | Voice cloning | Deferred | Not assigned | After functional release | Owner recordings and explicit clone provisioning |
 
 ## Checkpoint log
@@ -31,7 +31,7 @@ The status board on `feat/voice-v2` is authoritative. Copies on task branches ar
 | Checkpoint | Revision | Evidence | Push |
 | --- | --- | --- | --- |
 | CP1 — Initial v2 laboratory | `72df603` | 33 v2 Python tests; 4 Jev tests; TypeScript checks; `pip check`; publishable-key-prefix/template checks | Pushed to `origin/feat/voice-v2` |
-| CP2 — Parallel work plan | Pending | Ownership, handoff briefs, dependency order, budget and release gates | To push after document verification |
+| CP2 — Parallel work plan | `f41167e` | Ownership, handoff briefs, dependency order, budget and release gates | Pushed to `origin/feat/voice-v2`; frozen lane launch revision |
 
 ## Integration queue
 
