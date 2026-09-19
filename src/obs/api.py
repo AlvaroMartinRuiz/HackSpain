@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from typing import Any, Optional
 
 import uuid
@@ -21,8 +23,11 @@ from src.voice.tts import active_provider_name
 
 router = APIRouter(prefix="/api/console")
 
+ASSET_DIR = Path(__file__).resolve().parent.parent / "web" / "static" / "assets"
+
 _catalog: Optional[Catalog] = None
 _llm: Optional[LLMClient] = None
+_assets_cache: Optional[tuple[float, dict[str, Any]]] = None
 
 
 def configure(catalog: Catalog, llm: LLMClient) -> None:
@@ -65,6 +70,60 @@ def _recent_for_console() -> list[dict[str, Any]]:
         if len(recent) >= 20:
             break
     return recent
+
+
+@router.get("/assets")
+async def design_assets() -> dict[str, Any]:
+    """The Quiver-drawn icon set, inlined in one response.
+
+    Inlined rather than linked as <img> so the icons inherit `currentColor` and
+    change with the theme, and fetched in one request so a dashboard opening
+    twenty icons does not open twenty connections. An empty reply is a normal
+    answer: the dashboard draws CSS shapes instead.
+    """
+    global _assets_cache
+
+    if not ASSET_DIR.is_dir():
+        return {"icons": {}, "manifest": {}, "generated": False}
+
+    # Windows does not bump a directory's mtime when a file inside it changes,
+    # so the cache key is the newest file mtime rather than the folder's.
+    stamp = max(
+        (path.stat().st_mtime for path in ASSET_DIR.iterdir()),
+        default=ASSET_DIR.stat().st_mtime,
+    )
+    if _assets_cache is not None and _assets_cache[0] == stamp:
+        return _assets_cache[1]
+
+    icons: dict[str, str] = {}
+    for path in sorted(ASSET_DIR.glob("*.svg")):
+        try:
+            icons[path.stem] = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+
+    manifest: dict[str, Any] = {}
+    manifest_path = ASSET_DIR / "manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            manifest = {}
+
+    payload = {
+        "icons": icons,
+        "generated": bool(icons),
+        "manifest": {
+            "model": manifest.get("model"),
+            "credits_spent": manifest.get("credits_spent", 0),
+            "animated": sorted(
+                name for name, row in (manifest.get("generated") or {}).items()
+                if row.get("animated")
+            ),
+        },
+    }
+    _assets_cache = (stamp, payload)
+    return payload
 
 
 @router.get("/calls/{call_id}")

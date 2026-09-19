@@ -148,6 +148,7 @@ class CallSession:
         self._media_by_track[key] = self._media_by_track.get(key, 0) + 1
         self._media_frames += 1
         self._media_bytes += len(chunk)
+        self._pad_tape(key)
         buf = self._tape.setdefault(key, bytearray())
         if len(buf) < TAPE_CAP_BYTES:
             buf.extend(chunk)
@@ -160,15 +161,38 @@ class CallSession:
     async def _on_stt_notice(self, kind: str, payload: dict[str, Any]) -> None:
         await self.record(kind, payload)
 
+    def _tape_target_bytes(self) -> int:
+        """How long the tape should be right now, in µ-law bytes at 8 kHz.
+
+        Outbound only grows while the agent speaks, so without this pad the
+        two sides of a call cannot be mixed into one conversation.
+        """
+        elapsed = max(0.0, time.monotonic() - self._started_at)
+        return min(TAPE_CAP_BYTES, int(elapsed * audio.SAMPLE_RATE))
+
+    def _pad_tape(self, track: str) -> None:
+        buf = self._tape.setdefault(track, bytearray())
+        target = self._tape_target_bytes()
+        if len(buf) < target:
+            buf.extend(audio.SILENCE_BYTE * (target - len(buf)))
+
     def _save_tape(self) -> None:
         if self._tape_saved:
             return
         self._tape_saved = True
-        for track, buf in self._tape.items():
-            try:
-                tape.save(self.call_id, track, bytes(buf))
-            except Exception:
-                pass
+        # Both sides up to the same wall-clock length before the mix, so a
+        # quiet stretch of the agent is silence on the tape rather than a gap
+        # that collapses the timeline.
+        for track in ("inbound", "outbound"):
+            self._pad_tape(track)
+        try:
+            tape.save_call(
+                self.call_id,
+                bytes(self._tape.get("inbound", b"")),
+                bytes(self._tape.get("outbound", b"")),
+            )
+        except Exception:
+            pass
 
     async def on_stop(self) -> None:
         self._save_tape()
@@ -377,6 +401,7 @@ class CallSession:
         await self.record("agent_turn_end", {"text": text})
 
     async def _send_media(self, frame: bytes) -> None:
+        self._pad_tape("outbound")
         out = self._tape["outbound"]
         if len(out) < TAPE_CAP_BYTES:
             out.extend(frame)

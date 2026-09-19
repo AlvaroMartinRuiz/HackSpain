@@ -137,6 +137,18 @@ class Settings:
     )
     barge_in: bool = field(default_factory=lambda: _bool("BARGE_IN", True))
 
+    # Design assets
+    # Quiver draws SVG, not data, so it is called by scripts/generate_assets.py
+    # at build time and never on a page load. The console reads the result off
+    # disk, which is why it still has its icons with no key and no wifi.
+    quiver_api_key: str = field(default_factory=lambda: _env("QUIVER_API_KEY", "QUIVERAI_API_KEY"))
+    quiver_base_url: str = field(
+        default_factory=lambda: _env("QUIVER_BASE_URL", default="https://api.quiver.ai").rstrip("/")
+    )
+    # Empty on purpose: the generator asks /v1/models what this key may use
+    # rather than pinning an id that might not exist on the account.
+    quiver_model: str = field(default_factory=lambda: _env("QUIVER_MODEL"))
+
     # Observability
     db_path: str = field(default_factory=lambda: _env("DB_PATH", default=str(DATA_DIR / "calls.db")))
     catalog_path: str = field(
