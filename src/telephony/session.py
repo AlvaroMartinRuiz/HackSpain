@@ -84,6 +84,7 @@ class CallSession:
         self._closed = False
         self._sealing = False
         self._frozen = False
+        self.language = "es"
         self._started_at = time.monotonic()
         self._last_partial_at = 0.0
         self._media_frames = 0
@@ -235,16 +236,16 @@ class CallSession:
         # shows the turn as the caller starts hearing it.
         await self.record("agent_said", {"text": text, "greeting": first})
         if not self.text_mode:
-            await self._say_queue.put((self._generation, text))
+            await self._say_queue.put((self._generation, text, self.language))
 
     async def _speaker_loop(self) -> None:
         while True:
-            generation, text = await self._say_queue.get()
+            generation, text, language = await self._say_queue.get()
             if generation != self._generation:
                 continue
-            await self._synthesize(generation, text)
+            await self._synthesize(generation, text, language)
 
-    async def _synthesize(self, generation: int, text: str) -> None:
+    async def _synthesize(self, generation: int, text: str, language: str) -> None:
         started = time.perf_counter()
         first_byte_ms: Optional[int] = None
         total = 0
@@ -254,7 +255,7 @@ class CallSession:
             self._speaking_since = time.monotonic()
             self._current_text = text
         try:
-            async for chunk in self.synthesizer.stream(text):
+            async for chunk in self.synthesizer.stream(text, language):
                 if generation != self._generation:
                     return
                 if first_byte_ms is None:
@@ -385,6 +386,8 @@ class CallSession:
             await self.record("stt_echo", {"text": text})
             return
         await self.record("stt_final", {"text": text, "language": language})
+        if language:
+            self.language = language.lower()[:2]
         if self._closed:
             return
 

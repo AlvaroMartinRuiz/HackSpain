@@ -20,10 +20,13 @@ log = logging.getLogger("elturno")
 
 # ElevenLabs Creator allows 10 concurrent Flash requests.
 _TTS_GATE = asyncio.Semaphore(10)
+_SUPPORTED_ELEVENLABS_LANGUAGES = {"en", "es"}
 
 
 class Synthesizer:
-    async def stream(self, text: str) -> AsyncIterator[bytes]:  # pragma: no cover - interface
+    async def stream(
+        self, text: str, language: str = "es"
+    ) -> AsyncIterator[bytes]:  # pragma: no cover - interface
         raise NotImplementedError
         yield b""
 
@@ -45,9 +48,14 @@ class DeepgramSynthesizer(Synthesizer):
             limits=httpx.Limits(max_connections=60, max_keepalive_connections=30),
         )
 
-    async def stream(self, text: str) -> AsyncIterator[bytes]:
+    async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
+        model = (
+            settings.deepgram_tts_model_en
+            if language.lower().startswith("en")
+            else settings.deepgram_tts_model_es
+        )
         params = {
-            "model": settings.deepgram_tts_model,
+            "model": model,
             "encoding": "mulaw",
             "sample_rate": "8000",
             # Without this the WAV header arrives as audio and the line clicks.
@@ -76,7 +84,7 @@ class ElevenLabsSynthesizer(Synthesizer):
             limits=httpx.Limits(max_connections=60, max_keepalive_connections=30),
         )
 
-    async def stream(self, text: str) -> AsyncIterator[bytes]:
+    async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
         path = f"/v1/text-to-speech/{settings.elevenlabs_voice_id}/stream"
         params = {"output_format": "ulaw_8000", "optimize_streaming_latency": "3"}
         body = {
@@ -84,6 +92,10 @@ class ElevenLabsSynthesizer(Synthesizer):
             "model_id": settings.elevenlabs_model,
             "voice_settings": {"stability": 0.4, "similarity_boost": 0.7, "speed": 1.0},
         }
+        code = language.lower()[:2]
+        if code in _SUPPORTED_ELEVENLABS_LANGUAGES:
+            body["language_code"] = code
+
         async with self._client.stream("POST", path, params=params, json=body) as response:
             if response.status_code != 200:
                 await response.aread()
@@ -108,7 +120,7 @@ class CartesiaSynthesizer(Synthesizer):
             timeout=httpx.Timeout(30.0, connect=6.0),
         )
 
-    async def stream(self, text: str) -> AsyncIterator[bytes]:
+    async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
         body = {
             "model_id": settings.cartesia_model,
             "transcript": text,
@@ -140,7 +152,7 @@ class OpenAISynthesizer(Synthesizer):
             timeout=httpx.Timeout(30.0, connect=6.0),
         )
 
-    async def stream(self, text: str) -> AsyncIterator[bytes]:
+    async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
         body = {
             "model": settings.openai_tts_model,
             "voice": settings.openai_tts_voice,
@@ -170,7 +182,7 @@ class OpenAISynthesizer(Synthesizer):
 class SilentSynthesizer(Synthesizer):
     """No keys configured: keeps the pipeline testable without making sound."""
 
-    async def stream(self, text: str) -> AsyncIterator[bytes]:
+    async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
         # Roughly the length the words would have taken, so timing stays honest.
         duration_ms = min(6000, max(400, len(text) * 55))
         yield silence(duration_ms)
@@ -183,7 +195,7 @@ class ResilientSynthesizer(Synthesizer):
     def __init__(self, primary: Synthesizer, fallbacks: Optional[list[Synthesizer]] = None) -> None:
         self._chain = [primary] + list(fallbacks or [])
 
-    async def stream(self, text: str) -> AsyncIterator[bytes]:
+    async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
         last_error: Optional[Exception] = None
         for index, synth in enumerate(self._chain):
             attempts = 2 if index == 0 else 1
@@ -191,7 +203,7 @@ class ResilientSynthesizer(Synthesizer):
                 got_audio = False
                 try:
                     async with _TTS_GATE:
-                        async for chunk in synth.stream(text):
+                        async for chunk in synth.stream(text, language):
                             got_audio = True
                             yield chunk
                     return

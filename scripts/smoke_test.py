@@ -16,7 +16,7 @@ API_KEY = os.getenv("PLATFORM_API_KEY") or os.getenv("PROSPER_API_KEY", "")
 BASE_URL = (
     os.getenv("PLATFORM_API_BASE_URL")
     or os.getenv("PROSPER_BASE_URL")
-    or "https://voice.getprosperapp.com/api/v1"
+    or "https://hackspain.getprosperapp.com/api/v1"
 ).rstrip("/")
 
 
