@@ -86,14 +86,13 @@ class OperatorAPITests(unittest.TestCase):
     def test_public_operator_tools_expose_demo_records_without_credentials(self):
         config = replace(self.config, public_operator_tools=True, operator_token="")
         with TestClient(create_app(config)) as client:
-            self.assertEqual(client.get("/api/budget").status_code, 200)
             response = client.post("/api/rehearse", headers=self.origin, json=demo_request().model_dump())
             self.assertEqual(response.status_code, 200)
             run_id = response.json()["run_id"]
             folder = config.data_dir / "audio" / run_id
             folder.mkdir(parents=True)
             (folder / "inbound.wav").write_bytes(b"RIFF-fixture-audio")
-            for path in ("/health", "/api/budget", "/api/runs", f"/api/runs/{run_id}", f"/api/runs/{run_id}/audio/inbound"):
+            for path in ("/health", "/api/runs", f"/api/runs/{run_id}", f"/api/runs/{run_id}/audio/inbound"):
                 response = client.get(path)
                 self.assertEqual(response.status_code, 200)
                 for secret in (config.gateway_key, config.deepgram_key, config.cartesia_key, config.elevenlabs_key):
@@ -112,8 +111,6 @@ class OperatorAPITests(unittest.TestCase):
                 self.assertEqual(client.post("/api/rehearse", headers=headers, json=demo_request().model_dump()).status_code, 403)
             self.assertEqual(client.post("/api/sessions/text", headers=self.origin, json={"mode": "live"}).status_code, 422)
             self.assertEqual(client.post("/api/rehearse", headers=self.headers, json=demo_request().model_dump()).status_code, 200)
-            client.app.state.store.reserve("demo-budget", "test", 29_950_000)
-            self.assertEqual(client.post("/api/sessions/text", headers=self.origin, json={}).status_code, 402)
         with TestClient(create_app(replace(config, allow_paid=False))) as client:
             self.assertEqual(client.post("/api/sessions/text", headers=self.origin, json={}).status_code, 503)
 
@@ -126,7 +123,6 @@ class OperatorAPITests(unittest.TestCase):
             peer = next(iter(client.app.state.operator_request_times))
             client.app.state.operator_request_times[peer] = [time.monotonic()] * 60
             self.assertEqual(client.post("/api/rehearse", headers=self.origin, json=demo_request().model_dump()).status_code, 429)
-            self.assertEqual(client.get("/api/budget").status_code, 200)
 
     def test_public_carrier_accepts_headerless_calls_without_unlocking_tools_or_actions(self):
         config = replace(self.config, public_carrier_calls=True, operator_token="")
@@ -142,13 +138,12 @@ class OperatorAPITests(unittest.TestCase):
                 socket.send_json(self.handshake({"call_id": "prosper-headerless", "stream_sid": "MZpublic"}))
                 self.assertEqual(socket.receive_json(), {"event": "probe", "mode": "simulation"})
             self.assertEqual(seen, [("simulation", "prosper-headerless")])
-            self.assertEqual(client.get("/api/budget").status_code, 401)
             self.assertTrue(client.get("/health").json()["public_carrier_calls"])
             self.assertFalse(client.get("/health").json()["live_cutover_enabled"])
         with self.assertRaises(ValueError):
             create_app(replace(config, mode="live", allow_submissions=True, release_approved=False))
 
-    def test_public_carrier_keeps_query_origin_rate_and_budget_guards(self):
+    def test_public_carrier_keeps_query_origin_and_rate_guards(self):
         config = replace(self.config, public_carrier_calls=True)
         with TestClient(create_app(config)) as client:
             for path, headers in (("/ws?token=bad", {}), ("/ws", {"Origin": "https://attacker.test"})):
@@ -164,11 +159,6 @@ class OperatorAPITests(unittest.TestCase):
                     pass
             with client.websocket_connect("/ws", headers=self.headers):
                 pass
-            client.app.state.carrier_connect_times.clear()
-            client.app.state.store.reserve("carrier-budget", "test", 29_000_000)
-            with self.assertRaises(WebSocketDisconnect):
-                with client.websocket_connect("/ws"):
-                    pass
         with TestClient(create_app(replace(config, allow_paid=False))) as client:
             with self.assertRaises(WebSocketDisconnect):
                 with client.websocket_connect("/ws"):
@@ -210,7 +200,7 @@ class OperatorAPITests(unittest.TestCase):
                     self.assertEqual(ready["event"], "ready")
                     self.assertEqual(socket.receive_json()["source"], "simulation")
                 submitted.assert_not_awaited()
-                for path in ("/api/budget", "/api/runs", "/api/demo", f"/api/runs/{ready['run_id']}",
+                for path in ("/api/runs", "/api/demo", f"/api/runs/{ready['run_id']}",
                              f"/api/runs/{ready['run_id']}/audio/inbound"):
                     self.assertEqual(client.get(path).status_code, 401)
                 for path in ("/api/voice/ticket", "/api/sessions/text"):
@@ -223,16 +213,12 @@ class OperatorAPITests(unittest.TestCase):
                         pass
                 self.assertNotIn("operator-test", client.get("/").text)
 
-    def test_public_calling_preserves_provider_and_budget_gates(self):
+    def test_public_calling_preserves_provider_gates(self):
         config = replace(self.config, public_browser_calls=True, api_key="clinic-test")
         for blocked in (replace(config, allow_paid=False), replace(config, api_key="")):
             with TestClient(create_app(blocked)) as client:
                 self.assertFalse(client.get("/health").json()["public_voice_ready"])
                 self.assertEqual(client.post("/api/public/voice/ticket", headers=self.origin, json={}).status_code, 503)
-        with TestClient(create_app(config)) as client:
-            client.app.state.store.reserve("budget-fixture", "test", 29_000_000)
-            self.assertEqual(client.post("/api/public/voice/ticket", headers=self.origin, json={}).status_code, 402)
-            self.assertEqual(len(client.app.state.voice_tickets), 0)
 
     def test_public_ticket_rate_limit_ignores_spoofed_forwarded_headers_and_expires(self):
         config = replace(self.config, public_browser_calls=True, api_key="clinic-test")
@@ -329,7 +315,6 @@ class OperatorAPITests(unittest.TestCase):
                 self.assertEqual(response.status_code, 503)
             response = client.post("/api/rehearse", headers=self.headers, json=demo_request().model_dump())
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(client.get("/api/budget", headers=self.headers).json()["committed_microusd"], 0)
 
     def test_ticket_requires_authentication_and_same_origin(self):
         with TestClient(create_app(self.config)) as client:

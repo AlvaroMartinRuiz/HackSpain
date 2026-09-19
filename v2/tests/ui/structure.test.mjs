@@ -55,7 +55,6 @@ test('calling is one click with automatic language; diagnostics and live submiss
   assert.match(html, /value="es"/); assert.match(html, /value="en"/); assert.match(html, /value="ca"/);
   assert.doesNotMatch(html, /<option value="live"/);
   assert.match(html, /Official score/); assert.match(html, /Unknown/);
-  assert.match(html, /Reconciled actual/); assert.match(html, /Unreconciled reserved/);
 });
 
 test('recordings are blob-backed and are not rebuilt by the selected report polling renderer', () => {

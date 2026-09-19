@@ -8,12 +8,11 @@ export function runPath(id) {
 }
 export function apiMessage(status) {
   return ({401: 'Operator authentication expired or was rejected. Unlock with a valid token.',
-    402: 'The calling allowance has been reached. Contact the operator before starting another call.',
     403: 'This operation is disabled. Ask the operator to check paid-provider and practice permissions.',
     404: 'This resource is unavailable. Refresh the history; recordings may not exist for this run.',
     409: 'A session or action is already in progress. End it before starting another.',
     422: 'The request was rejected. Check the language, mode and message length.',
-    429: 'The session limit or budget allowance was reached. Wait, or reconcile the budget with the operator.',
+    429: 'The session or call limit was reached. Wait a moment before trying again.',
     503: 'The backend is not ready. Check readiness, provider configuration and available session capacity.'})[status]
     || `Request failed (HTTP ${status}). Check backend diagnostics and readiness; do not blindly retry paid requests.`;
 }
@@ -57,14 +56,6 @@ export class OperatorAPI {
     } finally { clearTimeout(timer); this.#requests.delete(controller); }
   }
 }
-export function budgetView(value = {}) {
-  const number = key => Number.isFinite(value[key]) ? value[key] : null;
-  const committed = number('committed_microusd');
-  const actual = number('reported_microusd');
-  return {actual, reserved: committed !== null && actual !== null ? Math.max(0, committed - actual) : null,
-    remaining: number('remaining_microusd'), cap: number('cap_microusd')};
-}
-export function money(microusd) { return Number.isFinite(microusd) ? new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD', maximumFractionDigits: 4}).format(microusd / 1e6) : 'Unknown'; }
 export function count(value) { return Number.isFinite(value) ? String(value) : 'Unknown'; }
 export function audioLabel(status) {
   return ({signal_sent: 'Non-silent socket output', non_silent: 'Non-silent socket output', audible: 'Non-silent socket output', sent: 'Socket output sent',

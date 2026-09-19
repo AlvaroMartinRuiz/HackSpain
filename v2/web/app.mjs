@@ -1,4 +1,4 @@
-import {OperatorAPI, ApiError, RunHistory, RecordingCache, runPath, validRunId, budgetView, money,
+import {OperatorAPI, ApiError, RunHistory, RecordingCache, runPath, validRunId,
   count, audioLabel, officialLabel, matchesFilter, transcriptRows, evidence, textElement} from './core.mjs';
 import {BrowserVoice} from './voice.mjs';
 
@@ -120,11 +120,6 @@ async function refreshHealth() {
   }
   controls();
 }
-function renderBudget(value) {
-  const b = budgetView(value || {});
-  for (const key of ['reserved', 'actual', 'remaining', 'cap']) el(`budget-${key}`).textContent = value ? money(b[key]) : '—';
-  el('budget-note').textContent = value ? 'Local reservations only, not shared provider-account spending. Reconciled actual covers settled entries only; outstanding reservations are not free.' : 'Unlock to view the local ledger. It is not an account-wide provider cap.';
-}
 function runButton(run) {
   const button = node('button', run.run_id, 'run-link'); button.type = 'button';
   button.setAttribute('aria-label', `Inspect run ${run.run_id}`); button.addEventListener('click', () => selectRun(run.run_id)); return button;
@@ -167,7 +162,6 @@ async function refreshAuthenticated() {
   } catch (error) { if (current()) { el('poll-status').textContent = 'History update failed; displayed data may be stale.'; reportError(error); } }
   if (!current()) return;
   await Promise.all([
-    (async () => { try { const b = await api.request('/api/budget'); if (current()) renderBudget(b); } catch (e) { if (current()) { el('budget-note').textContent = 'Budget refresh failed; amounts may be stale. Check connectivity before spending.'; reportError(e); } } })(),
     ...[...new Set([selected, session?.runId, lastSessionRun].filter(Boolean))].map(async id => {
       try {
         const response = await api.request(runPath(id)); if (!current()) return;
@@ -303,7 +297,7 @@ async function endSession() {
 el('auth-form').addEventListener('submit', async event => {
   event.preventDefault(); const token = el('token').value; el('token').value = ''; api.unlock(token); notice();
   el('unlock').disabled = true;
-  try { const b = await api.request('/api/budget'); renderBudget(b); controls(); await refreshAuthenticated(); }
+  try { await api.request('/api/runs?limit=1'); controls(); await refreshAuthenticated(); }
   catch (error) { api.lock(); clearWorkspace(); reportError(error); }
   finally { el('unlock').disabled = false; }
 });

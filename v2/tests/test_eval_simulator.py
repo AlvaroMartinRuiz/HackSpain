@@ -48,11 +48,8 @@ class NaturalSimulationTests(unittest.IsolatedAsyncioTestCase):
         report = self.store.report(self.state.run_id)
         self.assertNotIn("do-not-store", json.dumps(report))
         self.assertNotIn("mock-secret", json.dumps(report))
-        self.assertEqual(report["cost"]["reserved_microusd"], 100_000)
-        self.assertIsNone(report["cost"]["actual_microusd"])
-        self.assertFalse(report["cost"]["actual_complete"])
 
-    async def test_provider_failures_and_invalid_response_remain_reserved_and_sanitized(self):
+    async def test_provider_failures_and_invalid_response_are_sanitized(self):
         for response in (httpx.Response(429, text="SECRET-BODY"), httpx.Response(200, json={"choices": []}),
                          httpx.Response(200, json={"choices": [{"finish_reason": "length", "message": {"content": "SECRET-BODY"}}]})):
             async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _, r=response: r)) as client:
@@ -61,7 +58,6 @@ class NaturalSimulationTests(unittest.IsolatedAsyncioTestCase):
                     await caller.reply("How can I help?", "en")
         report = self.store.report(self.state.run_id)
         self.assertNotIn("SECRET-BODY", json.dumps(report))
-        self.assertEqual(self.store.budget()["reserved_microusd"], 300_000)
         errors = [e for e in report["events"] if e["kind"] == "provider_error"]
         self.assertEqual(len(errors), 3)
         self.assertIn("phase", errors[0]["payload"])
@@ -115,7 +111,7 @@ class NaturalSimulationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report["fixture_grade"]["passed"])
         self.assertEqual(report["state"]["turn"], 1)
 
-    async def test_only_one_duel_per_persistent_ledger(self):
+    async def test_only_one_duel_per_persistent_run_store(self):
         self.store.claim_experiment("existing")
         other = RunStore(str(Path(self.folder.name) / "runs.db"))
         self.addCleanup(other.close)
@@ -144,7 +140,6 @@ class NaturalSimulationTests(unittest.IsolatedAsyncioTestCase):
                            {"max_seconds": 121}, {"language": "fr"}, {"scenario": "invalid"}, {"split": "invalid"}):
                 with self.subTest(params=params), self.assertRaises(ValueError):
                     await run_duel(self.config, self.store, **params)
-        self.assertEqual(self.store.budget()["committed_microusd"], 0)
         for body in ({"text": " "}, {"text": "hello", "done": "false"}, {"text": "x" * 501}):
             with self.assertRaises(ValidationError):
                 CallerTurn(**body)

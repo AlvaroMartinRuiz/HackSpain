@@ -52,14 +52,14 @@ class ModelCaller:
         if not self.config.allow_paid or not self.config.gateway_key:
             raise PermissionError("paid caller simulation is disabled")
         if self.store.db.execute("PRAGMA database_list").fetchone()[2] == "":
-            raise ValueError("paid caller simulation requires a persistent budget ledger")
+            raise ValueError("paid caller simulation requires a persistent run store")
         if language not in LANGUAGES or not isinstance(agent_text, str) or not 1 <= len(agent_text) <= 16_000:
             raise ValueError("caller requires a bounded observed reply and supported language")
         if self.turns >= 8:
             raise ValueError("caller turn limit exceeded")
         self.turns += 1
         self.history = [*self.history[-11:], {"role": "user", "content": agent_text[:1600]}]
-        reservation = self.store.reserve(self.run_id, "simulated_caller", 100_000)
+        reservation = uuid4().hex
         started = time.monotonic()
         phase, status = "request", None
         try:
@@ -110,7 +110,7 @@ async def run_duel(config: Config, store: RunStore, language: str = "en", max_tu
         raise ValueError("unsupported language or dataset split")
     goal = caller_goal(scenario)
     if store.db.execute("PRAGMA database_list").fetchone()[2] == "":
-        raise ValueError("paid duels require a persistent budget ledger")
+        raise ValueError("paid duels require a persistent run store")
     state = CallState(call_id="duel-" + uuid4().hex, language=language,
                       reference_time=datetime.fromisoformat(CLOCK))
     store.claim_experiment(state.run_id, math.ceil(max_seconds) + 30)

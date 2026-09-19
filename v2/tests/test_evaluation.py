@@ -27,7 +27,6 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(fixture_grade(report, EXPECTED)["passed"], language)
             self.assertEqual(report["state"]["language"], language)
             self.assertEqual(report["metrics"]["audio_status"], "not_measured")
-        self.assertEqual(store.budget()["committed_microusd"], 0)
 
     async def test_two_agent_loop_with_mocked_models_uses_only_simulated_actions(self):
         folder = tempfile.TemporaryDirectory()
@@ -47,7 +46,7 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["manifest"]["execution"], "text_agent_duel")
         self.assertTrue(all(isinstance(call.args[0], str) for call in caller.call_args_list))
 
-    async def test_live_simulation_requires_opt_in_and_persistent_budget(self):
+    async def test_live_simulation_requires_opt_in_and_persistent_store(self):
         store = RunStore()
         self.addCleanup(store.close)
         with self.assertRaises(PermissionError):

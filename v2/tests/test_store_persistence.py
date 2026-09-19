@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from v2.models import CallState
-from v2.store import BudgetExceeded, RunStore
+from v2.store import RunStore
 
 
 class StoreTests(unittest.TestCase):
@@ -24,13 +24,12 @@ class StoreTests(unittest.TestCase):
         self.state = CallState(call_id="synthetic", reference_time=datetime(2026, 9, 19, tzinfo=timezone.utc))
         self.store.save(self.state, {"fixture": "synthetic-v1"})
 
-    def test_reopen_retains_versions_events_manifest_actions_budget(self):
+    def test_reopen_retains_versions_events_manifest_and_actions(self):
         key, previous = self.store.begin_action(self.state.run_id, "mine", "cancel", {"appointment_id": "synthetic"})
         self.assertIsNone(previous)
         self.store.event(self.state.run_id, "call_started", {"status": "active"})
         self.state.turn = 1
         self.store.save(self.state)
-        self.store.reserve(self.state.run_id, "mock", 50)
         other = RunStore(self.path)
         self.addCleanup(other.close)
         report = other.report(self.state.run_id)
@@ -39,7 +38,6 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(report["status"], "active")
         self.assertEqual(report["actions"][0]["action_key"], key)
         self.assertEqual(report["actions"][0]["status"], "pending")
-        self.assertEqual(other.budget()["reserved_microusd"], 50)
         self.assertEqual(other.db.execute("SELECT COUNT(*) FROM state_versions").fetchone()[0], 2)
         with self.assertRaises(ValueError):
             other.save(self.state, {"fixture": "replacement"})
@@ -62,7 +60,7 @@ class StoreTests(unittest.TestCase):
         upgraded = RunStore(path)
         self.addCleanup(upgraded.close)
         self.assertEqual(upgraded.report(self.state.run_id)["manifest"], {"old": True})
-        self.assertEqual(upgraded.budget()["committed_microusd"], 123)
+        self.assertEqual(upgraded.db.execute("SELECT reserved FROM budget WHERE reservation_id='old-cost'").fetchone()[0], 123)
         self.assertEqual(upgraded.report(self.state.run_id)["actions"][0]["action_key"], "old-key")
         self.assertEqual(upgraded.list_runs()["runs"][0]["status"], "unknown")
 
@@ -118,43 +116,7 @@ class StoreTests(unittest.TestCase):
         self.store.finish_action(key, receipt)
         self.assertEqual(self.store.begin_action(self.state.run_id, "other", "cancel", dict(reversed(list(payload.items())))), (key, receipt))
 
-    def test_budget_concurrency_unknowns_reconciliation_and_reopen(self):
-        other = RunStore(self.path)
-        self.addCleanup(other.close)
-        def reserve(index):
-            try:
-                return (other if index % 2 else self.store).reserve("batch", "mock", 10_000_000)
-            except BudgetExceeded:
-                return None
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            reservations = [r for r in pool.map(reserve, range(20)) if r]
-        self.assertEqual(len(reservations), 3)
-        self.assertEqual(other.budget()["reserved_microusd"], 30_000_000)
-        self.assertFalse(other.budget()["actual_complete"])
-        self.store.settle(reservations[0], 5_000_000)
-        other.settle(reservations[0], 5_000_000)
-        self.assertEqual(other.budget()["remaining_microusd"], 5_000_000)
-        with self.assertRaises(ValueError):
-            other.settle(reservations[0], 0)
-        self.store.settle(reservations[1], 20_000_000)
-        self.assertEqual(other.budget()["over_cap_microusd"], 5_000_000)
-        with self.assertRaises(BudgetExceeded):
-            other.reserve("batch", "mock", 1)
-        reopened = RunStore(self.path)
-        self.addCleanup(reopened.close)
-        self.assertEqual(reopened.budget()["committed_microusd"], 35_000_000)
-
-    def test_lower_cap_is_not_reset_by_reopening(self):
-        smaller = RunStore(self.path, cap_microusd=100)
-        self.addCleanup(smaller.close)
-        self.assertEqual(self.store.budget()["cap_microusd"], 100)
-        with self.assertRaises(BudgetExceeded):
-            self.store.reserve("run", "mock", 101)
-
-    def test_invalid_data_does_not_mutate_state_or_ledger(self):
-        for amount in (True, False, 0, -1, 0.5, float("nan"), "1", 2**63):
-            with self.subTest(amount=amount), self.assertRaises(ValueError):
-                self.store.reserve("run", "mock", amount)
+    def test_invalid_data_does_not_mutate_state(self):
         for payload in ([1], {"bad": float("nan")}, {"bad": object()}, {1: "bad"}, {"bad": "x" * 262_145}):
             with self.subTest(payload=type(payload)), self.assertRaises(ValueError):
                 self.store.event(self.state.run_id, "bad", payload)
@@ -162,7 +124,6 @@ class StoreTests(unittest.TestCase):
             self.store.event("missing", "call_started", {"status": "active"})
         with self.assertRaises(ValueError):
             self.store.event(self.state.run_id, "call_ended", {"status": "active"})
-        self.assertEqual(self.store.budget()["committed_microusd"], 0)
         self.assertFalse(self.store.report(self.state.run_id)["events"])
 
     def test_listing_stable_tie_keysets_and_no_trace_or_grade_inference(self):

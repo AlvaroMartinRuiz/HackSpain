@@ -29,7 +29,7 @@ bash run.sh
 
 Both run `python -m v2`. The default port is 7861. `GET /health` reports missing configuration without exposing values; configured keys alone do not prove provider acceptance.
 
-Open `http://127.0.0.1:7861/`. With `V2_PUBLIC_BROWSER_CALLS=true`, the caller page needs no operator token: press Call and allow microphone access. Public calls are read-only practice, limited to one at a time, and use the existing paid-provider budget. Operator tools, private HTTP endpoints and the carrier `/ws` still require `X-V2-Token`; use Operator tools to unlock private history and recordings. Do not put long-lived tokens in query strings.
+Open `http://127.0.0.1:7861/`. With `V2_PUBLIC_BROWSER_CALLS=true`, the caller page needs no operator token: press Call and allow microphone access. Public calls are read-only practice, limited to one at a time. Operator tools, private HTTP endpoints and the carrier `/ws` still require `X-V2-Token`; use Operator tools to unlock private history and recordings. Do not put long-lived tokens in query strings.
 
 The current delivery does not authorize deployment or replacement of an existing remote endpoint. A carrier integration must send the configured authentication header and use mono 8 kHz mu-law Twilio messages. Live carrier mode is gated by both `V2_ALLOW_SUBMISSIONS=true` and `V2_RELEASE_APPROVED=true`; set neither until acceptance tests and explicit release approval are complete. Browser and text sessions can select only simulation or read-only practice, even when the carrier is live.
 
@@ -59,11 +59,11 @@ In `services/jev`, use Node 22.18 or later: `npm ci`, `npm run check`, `npm test
 
 ## Paid checks
 
-`python -m v2.evaluation --duel --language es` runs a bounded model-to-model text conversation against fixtures. `--review` also sends the synthetic transcript to Jev. These require explicit paid opt-in and the persistent local budget ledger; neither submits to Prosper. Text-only is not equivalent to free when a model is used.
+`python -m v2.evaluation --duel --language es` runs a bounded model-to-model text conversation against fixtures. `--review` also sends the synthetic transcript to Jev. These require explicit paid opt-in and a persistent local run store; neither submits to Prosper. Text-only is not equivalent to free when a model is used.
 
 Configure the separate Jev function with `JEV_SERVICE_TOKEN`, `JEV_ENABLE_PAID`, and gateway credentials. Python uses `V2_JEV_URL` over HTTPS and the matching `V2_JEV_TOKEN`. Keep service deployment authorization separate from model-gateway access.
 
-Run paid checks serially within the shared $30 effort cap. Do not reset the database or create fresh ledgers to bypass reservations. Check actual account usage separately; the local ledger does not measure teammates' activity.
+Run paid checks serially and mindfully within the shared $30 effort cap for real provider spend. v2 does not enforce that cap locally; check actual account usage at each provider directly.
 
 `scripts/mock_call.py` sends carrier-format audio to v2 and may consume paid quota. It reads the operator token from configuration. Run it only against non-scored, explicitly approved test sessions.
 

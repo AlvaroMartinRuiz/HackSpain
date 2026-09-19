@@ -1,37 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {OperatorAPI, ApiError, apiMessage, RunHistory, RecordingCache, validRunId, runPath, budgetView,
-  money, audioLabel, officialLabel, matchesFilter, evidence, transcriptRows, textElement} from '../../web/core.mjs';
+import {OperatorAPI, ApiError, apiMessage, RunHistory, RecordingCache, validRunId, runPath,
+  audioLabel, officialLabel, matchesFilter, evidence, transcriptRows, textElement} from '../../web/core.mjs';
 
 const response = value => ({ok: true, status: 200, json: async () => value});
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return {promise, resolve}; };
 
 test('operator credential exists only in an authenticated request header; health is public', async () => {
   const seen = [], api = new OperatorAPI(async (path, options) => { seen.push({path, options}); return response({}); });
-  await assert.rejects(api.request('/api/budget'), {status: 401});
+  await assert.rejects(api.request('/api/runs'), {status: 401});
   api.unlock('test-memory-only');
-  await api.request('/health', {publicRequest: true}); await api.request('/api/budget');
+  await api.request('/health', {publicRequest: true}); await api.request('/api/runs');
   assert.equal(seen[0].options.headers['X-V2-Token'], undefined);
   assert.equal(seen[1].options.headers['X-V2-Token'], 'test-memory-only');
-  assert.equal(seen[1].path, '/api/budget');
+  assert.equal(seen[1].path, '/api/runs');
   assert.equal(seen[1].options.cache, 'no-store'); assert.equal(seen[1].options.redirect, 'error');
   assert.equal(seen[1].options.credentials, 'omit');
   assert.doesNotMatch(JSON.stringify(api), /test-memory-only/);
   api.lock(); assert.equal(api.authenticated, false);
-  await assert.rejects(api.request('/api/budget'), {status: 401});
+  await assert.rejects(api.request('/api/runs'), {status: 401});
 });
 
 test('explicit public operator access needs no token and sends no credential header', async () => {
   const seen = [], api = new OperatorAPI(async (_path, options) => { seen.push(options); return response({}); });
-  await assert.rejects(api.request('/api/budget'), {status: 401});
+  await assert.rejects(api.request('/api/runs'), {status: 401});
   assert.equal(api.setPublicOperatorAccess(true), true);
   assert.equal(api.authenticated, false); assert.equal(api.operatorAccess, true); assert.equal(api.publicOperatorAccess, true);
-  await api.request('/api/budget');
+  await api.request('/api/runs');
   assert.equal(seen[0].headers['X-V2-Token'], undefined); assert.equal(seen[0].credentials, 'omit');
   assert.equal(api.setPublicOperatorAccess(true), false);
   api.setPublicOperatorAccess(false);
   assert.equal(api.operatorAccess, false);
-  await assert.rejects(api.request('/api/budget'), {status: 401});
+  await assert.rejects(api.request('/api/runs'), {status: 401});
 });
 
 test('revoking public operator access cancels pending data and preserves private-token mode', async () => {
@@ -53,7 +53,7 @@ test('public and authenticated API requests bypass ngrok warnings without relyin
     return response({accepted: true});
   });
   api.unlock('memory-only-token');
-  for (const [path, options] of [['/health', {publicRequest: true}], ['/api/budget', {}],
+  for (const [path, options] of [['/health', {publicRequest: true}], ['/api/runs', {}],
     ['/api/voice/ticket', {method: 'POST', body: {language: 'auto', mode: 'practice'}}]]) {
     assert.deepEqual(await api.request(path, options), {accepted: true});
   }
@@ -86,7 +86,7 @@ test('401 locks and invalidates in-flight requests without reflecting server bod
 test('locking aborts pending fetch and rejects late results even if fetch ignores abort', async () => {
   const pending = deferred(); let signal;
   const api = new OperatorAPI(async (_path, options) => { signal = options.signal; return pending.promise; });
-  api.unlock('private'); const request = api.request('/api/budget'); api.lock();
+  api.unlock('private'); const request = api.request('/api/runs'); api.lock();
   assert.equal(signal.aborted, true); pending.resolve(response({private: 'data'}));
   await assert.rejects(request, /cancelled/i);
 });
@@ -115,13 +115,6 @@ test('API path validation and safe actionable error messages', async () => {
   for (const status of [401, 403, 404, 409, 422, 429, 503, 500]) assert.ok(apiMessage(status).length > 25);
   assert.equal(validRunId('../secrets'), false); assert.equal(validRunId('a?token=b'), false); assert.equal(validRunId('run_1-ab'), true);
   assert.throws(() => runPath('../bad')); assert.equal(runPath('run_1'), '/api/runs/run_1');
-});
-
-test('budget separates outstanding reservations from settled actual and leaves unknown unknown', () => {
-  assert.deepEqual(budgetView({cap_microusd: 30000000, committed_microusd: 5000000, reported_microusd: 1200000, remaining_microusd: 25000000}),
-    {cap: 30000000, reserved: 3800000, actual: 1200000, remaining: 25000000});
-  assert.equal(budgetView({committed_microusd: 10}).reserved, null);
-  assert.equal(budgetView({reported_microusd: 0}).actual, 0); assert.equal(money(null), 'Unknown'); assert.equal(money(0), '$0.00');
 });
 
 test('official, fixture, model, HTTP receipt and audio evidence remain distinct', () => {

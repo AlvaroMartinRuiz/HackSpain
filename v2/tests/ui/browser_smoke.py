@@ -239,7 +239,6 @@ def main():
         try:
             with patch("v2.voice.run_voice", side_effect=mock_voice), serve(config, store) as port, serve(voice_config, voice_store) as voice_port:
                 asyncio.run(inspect(args.browser, root, port, token, voice_port))
-            assert store.budget()["committed_microusd"] == voice_store.budget()["committed_microusd"] == 0
             assert len(store.list_runs()["runs"]) == 3
             runs = voice_store.list_runs()["runs"]
             assert len(runs) == 2

@@ -35,7 +35,6 @@ class OutcomeEvaluationTests(unittest.IsolatedAsyncioTestCase):
                         self.assertIsNone(report["official_grade"])
                         self.assertEqual(report["failure_review"]["primary_category"], "no_failure_observed")
         self.assertEqual(len(store.list_runs()["runs"]), 18)
-        self.assertEqual(store.budget()["committed_microusd"], 0)
 
     async def test_grading_is_independent_of_fixture_names_and_rejects_wrong_entities(self):
         store = RunStore()

@@ -6,6 +6,7 @@ import math
 import re
 import time
 from collections.abc import Callable
+from uuid import uuid4
 
 import httpx
 
@@ -246,11 +247,11 @@ class _ProviderClient:
             raise RuntimeError("provider client is closed")
 
     async def _request(self, *, run_id: str, provider: str, url: str, token: str, payload: dict,
-                       cost: int, attempts: int, timeout: float, validate: Callable):
+                       attempts: int, timeout: float, validate: Callable):
         encoded = _encoded(payload)
         for attempt in range(1, attempts + 1):
             self._ensure_open()
-            reservation = self.store.reserve(run_id, provider, cost)
+            reservation = uuid4().hex
             started = time.monotonic()
             phase, status, delay = "request", None, RETRY_DELAY_S
             first_output_ms = None
@@ -361,7 +362,7 @@ class VercelInterpreter(_ProviderClient):
             raise ValueError("conversation state exceeds the bounded model context")
         result, usage, reservation, elapsed, attempt, first_output_ms = await self._request(
             run_id=state.run_id, provider="vercel_llm", url="https://ai-gateway.vercel.sh/v1/chat/completions",
-            token=self.config.gateway_key, cost=100_000, attempts=GATEWAY_ATTEMPTS, timeout=GATEWAY_TIMEOUT_S,
+            token=self.config.gateway_key, attempts=GATEWAY_ATTEMPTS, timeout=GATEWAY_TIMEOUT_S,
             validate=_decision,
             payload={"model": self.config.llm_model, "max_tokens": 1800, "temperature": 0,
                      "response_format": {"type": "json_schema", "json_schema": {
@@ -402,7 +403,7 @@ class JevClient(_ProviderClient):
             raise ValueError("evaluation state too large")
         result, usage, reservation, elapsed, attempt, first_output_ms = await self._request(
             run_id=run_id, provider="jev", url=self.config.jev_url, token=self.config.jev_token,
-            payload=payload, cost=10_000, attempts=1, timeout=JEV_TIMEOUT_S,
+            payload=payload, attempts=1, timeout=JEV_TIMEOUT_S,
             validate=lambda body: _assessment(body, run_id),
         )
         self.store.event(run_id, "model_assessment", {"source": "jev", "question_pack": QUESTION_PACK,

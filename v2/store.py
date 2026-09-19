@@ -13,10 +13,6 @@ from pathlib import Path
 from uuid import uuid4
 
 
-class BudgetExceeded(RuntimeError):
-    pass
-
-
 LIFECYCLE = {"session_started", "call_started", "call_ended", "session_ended"}
 STATUSES = {"active", "completed", "disconnected", "error", "timed_out"}
 ACTIONS = {"book", "cancel", "reschedule", "register", "no_action", "escalate"}
@@ -47,11 +43,6 @@ def _json(value, maximum=1_048_576):
     if len(result.encode("utf-8")) > maximum:
         raise ValueError("JSON data exceeds size limit")
     return result
-
-
-def _money(value, positive=False):
-    if type(value) is not int or value < (1 if positive else 0) or value > 2**63 - 1:
-        raise ValueError("cost must be an integer number of nonnegative microusd")
 
 
 def _now():
@@ -131,10 +122,7 @@ def report_metrics(report):
 
 
 class RunStore:
-    def __init__(self, path: str = ":memory:", cap_microusd: int = 30_000_000):
-        _money(cap_microusd)
-        if cap_microusd > 30_000_000:
-            raise ValueError("this project's authorized cap is $30")
+    def __init__(self, path: str = ":memory:"):
         path = str(path)
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -143,7 +131,6 @@ class RunStore:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=30000")
-        self.cap = cap_microusd
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS runs (
                 run_id TEXT PRIMARY KEY, call_id TEXT NOT NULL, mode TEXT NOT NULL,
@@ -157,10 +144,6 @@ class RunStore:
             CREATE TABLE IF NOT EXISTS actions (
                 action_key TEXT PRIMARY KEY, run_id TEXT NOT NULL, intent_id TEXT NOT NULL,
                 status TEXT NOT NULL, receipt TEXT
-            );
-            CREATE TABLE IF NOT EXISTS budget (
-                reservation_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, service TEXT NOT NULL,
-                reserved INTEGER NOT NULL, actual INTEGER, status TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS store_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS state_versions (
@@ -179,14 +162,10 @@ class RunStore:
                 timestamp TEXT NOT NULL, status TEXT NOT NULL, receipt TEXT, evidence TEXT
             );
             CREATE INDEX IF NOT EXISTS runs_keyset ON runs(created_at DESC, run_id DESC);
-            CREATE INDEX IF NOT EXISTS budget_run ON budget(run_id);
             CREATE INDEX IF NOT EXISTS actions_run ON actions(run_id);
         """)
         with self._transaction():
             self.db.execute("INSERT OR IGNORE INTO store_metadata VALUES ('schema_version','2')")
-            self.db.execute("INSERT OR IGNORE INTO store_metadata VALUES ('cap_microusd',?)", (str(self.cap),))
-            self.db.execute("UPDATE store_metadata SET value=? WHERE key='cap_microusd' AND CAST(value AS INTEGER)>?",
-                            (str(self.cap), self.cap))
             rows = self.db.execute("SELECT run_id,state FROM runs WHERE run_id NOT IN (SELECT run_id FROM run_projections)").fetchall()
             for row in rows:
                 summary = {}
@@ -277,14 +256,6 @@ class RunStore:
             _identifier(reason, "termination reason")
         return self.event(run_id, "session_ended", {"status": status, "reason": reason})
 
-    def _cost(self, run_id):
-        committed, actual, reserved, count = self.db.execute(
-            "SELECT COALESCE(SUM(COALESCE(actual,reserved)),0),SUM(actual),"
-            "COALESCE(SUM(CASE WHEN actual IS NULL THEN reserved ELSE 0 END),0),COUNT(*) FROM budget WHERE run_id=?",
-            (run_id,)).fetchone()
-        return {"committed_microusd": committed, "actual_microusd": None if reserved else (actual or 0),
-                "reported_microusd": actual or 0, "reserved_microusd": reserved, "actual_complete": reserved == 0}
-
     def _summary(self, row):
         state, summary = json.loads(row["state"]), json.loads(row["summary"])
         attempts, unresolved = self.db.execute("SELECT COUNT(*),COALESCE(SUM(status IN ('pending','unresolved')),0) FROM actions WHERE run_id=?", (row["run_id"],)).fetchone()
@@ -292,7 +263,7 @@ class RunStore:
         return {"run_id": row["run_id"], "call_id": row["call_id"], "mode": row["mode"],
                 "language": state.get("language"), "created_at": row["created_at"],
                 "status": summary.get("status", state.get("status", "unknown")),
-                "metrics": projected_metrics(state, summary, self._cost(row["run_id"])), "official_grade": None}
+                "metrics": projected_metrics(state, summary), "official_grade": None}
 
     def report(self, run_id: str) -> dict | None:
         _identifier(run_id, "run_id")
@@ -303,10 +274,9 @@ class RunStore:
             result = self._summary(row)
             events = self.db.execute("SELECT * FROM events WHERE run_id=? ORDER BY sequence", (run_id,)).fetchall()
             actions = self.db.execute("SELECT * FROM actions WHERE run_id=? ORDER BY action_key", (run_id,)).fetchall()
-            cost = self._cost(run_id)
         projection = json.loads(row["summary"])
         return {**result, "schema_version": 2, "manifest": json.loads(row["manifest"]),
-                "state": json.loads(row["state"]), "cost": cost,
+                "state": json.loads(row["state"]),
                 "fixture_grade": projection.get("fixture_grade"), "model_assessment": projection.get("model_assessment"),
                 "failure_review": projection.get("failure_review"),
                 "actions": [{**dict(a), "receipt": json.loads(a["receipt"]) if a["receipt"] else None} for a in actions],
@@ -414,45 +384,3 @@ class RunStore:
         with self._transaction():
             self.db.execute("UPDATE evaluation_leases SET expires_at=? WHERE name='paid_duel' AND owner=?", (_now(), owner))
 
-    def reserve(self, run_id: str, service: str, microusd: int) -> str:
-        _identifier(run_id, "run_id")
-        _identifier(service, "service")
-        _money(microusd, positive=True)
-        reservation = uuid4().hex
-        with self._transaction():
-            cap = min(self.cap, int(self.db.execute("SELECT value FROM store_metadata WHERE key='cap_microusd'").fetchone()[0]))
-            used = self.db.execute("SELECT COALESCE(SUM(COALESCE(actual,reserved)),0) FROM budget").fetchone()[0]
-            if used + microusd > cap:
-                raise BudgetExceeded("authorized API budget exhausted")
-            self.db.execute("INSERT INTO budget VALUES (?,?,?,?,NULL,?)", (reservation, run_id, service, microusd, "reserved"))
-        return reservation
-
-    def settle(self, reservation: str, actual_microusd: int):
-        _identifier(reservation, "reservation")
-        _money(actual_microusd)
-        with self._transaction():
-            row = self.db.execute("SELECT status,actual,reserved FROM budget WHERE reservation_id=?", (reservation,)).fetchone()
-            if row is None:
-                raise ValueError("unknown reservation")
-            if row["status"] == "settled":
-                if row["actual"] == actual_microusd:
-                    return
-                raise ValueError("actual cost is immutable after reconciliation")
-            committed = self.db.execute("SELECT COALESCE(SUM(COALESCE(actual,reserved)),0) FROM budget").fetchone()[0]
-            if committed - row["reserved"] + actual_microusd > 2**63 - 1:
-                raise ValueError("actual cost exceeds the ledger integer range")
-            self.db.execute("UPDATE budget SET actual=?,status='settled' WHERE reservation_id=?", (actual_microusd, reservation))
-
-    def budget(self) -> dict:
-        with self._transaction(immediate=False):
-            used, reported, reserved, pending = self.db.execute(
-                "SELECT COALESCE(SUM(COALESCE(actual,reserved)),0),COALESCE(SUM(actual),0),"
-                "COALESCE(SUM(CASE WHEN actual IS NULL THEN reserved ELSE 0 END),0),"
-                "SUM(CASE WHEN actual IS NULL THEN 1 ELSE 0 END) FROM budget"
-            ).fetchone()
-            cap = min(self.cap, int(self.db.execute("SELECT value FROM store_metadata WHERE key='cap_microusd'").fetchone()[0]))
-        return {"cap_microusd": cap, "committed_microusd": used, "reported_microusd": reported,
-                "reserved_microusd": reserved, "unsettled_reservations": pending or 0,
-                "actual_complete": not pending, "remaining_microusd": max(0, cap - used),
-                "over_cap_microusd": max(0, used - cap),
-                "scope": "v2 local reservations, not the shared provider account"}

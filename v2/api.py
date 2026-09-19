@@ -29,7 +29,7 @@ from v2.evaluation import demo_request, metrics, rehearse
 from v2.models import MAX_CALL_TURNS, CallState, Language, RehearsalRequest, Reply
 from v2.platform_api.client import PlatformClient
 from v2.providers import VercelInterpreter
-from v2.store import BudgetExceeded, RunStore
+from v2.store import RunStore
 from v2.workflow import CallController, TEXT
 
 
@@ -169,9 +169,6 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
             missing = [*missing, "PLATFORM_API_KEY"]
         if missing:
             raise HTTPException(503, {"message": "providers are not configured", "missing": missing})
-        minimum = 3_100_000 if voice else 100_000
-        if app.state.store.budget()["remaining_microusd"] < minimum:
-            raise HTTPException(402, "insufficient unreserved API budget")
 
     def report_run(run_id: str):
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", run_id):
@@ -204,10 +201,6 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
             raise
         return controller, clinic, interpreter
 
-    @app.exception_handler(BudgetExceeded)
-    async def exhausted(_request, _exc):
-        return JSONResponse({"detail": "authorized API budget exhausted"}, status_code=402)
-
     @app.get("/health")
     async def health():
         return {"status": "ok", "mode": config.mode, "live_cutover_enabled": config.mode == "live",
@@ -222,10 +215,6 @@ def create_app(config: Config | None = None, store: RunStore | None = None) -> F
     @app.get("/")
     async def console():
         return FileResponse(Path(__file__).parent / "console.html")
-
-    @app.get("/api/budget", dependencies=[Depends(authenticated)])
-    async def budget():
-        return app.state.store.budget()
 
     @app.get("/api/demo", dependencies=[Depends(authenticated)])
     async def demo(language: Language = "en"):

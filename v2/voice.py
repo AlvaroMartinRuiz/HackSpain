@@ -143,11 +143,11 @@ class CatalanElevenLabsTTS(TrackedTTS, ElevenLabsHttpTTSService):
 class GraphProcessor(FrameProcessor):
     def __init__(self, controller: CallController, *, voices: dict | None = None, stt=None,
                  sent_signal: Callable[[], int] = lambda: 0, grace_s: float = 15,
-                 paid: bool = False, response_timeout_s: float = 90, turn_timeout_s: float = 30,
+                 response_timeout_s: float = 90, turn_timeout_s: float = 30,
                  uncommitted_speech_timeout_s: float = 5):
         super().__init__()
         self.controller, self.voices, self.stt = controller, voices or {}, stt
-        self.sent_signal, self.grace_s, self.paid = sent_signal, max(0, grace_s), paid
+        self.sent_signal, self.grace_s = sent_signal, max(0, grace_s)
         self.response_timeout_s, self.turn_timeout_s = response_timeout_s, turn_timeout_s
         self.uncommitted_speech_timeout_s = uncommitted_speech_timeout_s
         self.vad_guard_task: asyncio.Task | None = None
@@ -275,8 +275,6 @@ class GraphProcessor(FrameProcessor):
             return
         if not reply.text.strip() or len(reply.text) > 1600 or reply.language not in {"en", "es", "ca"}:
             raise ValueError("invalid bounded voice response")
-        if self.paid:
-            self.controller.store.reserve(self.controller.state.run_id, "tts", 1_000_000)
         if reply.language != self.language and self.stt is not None:
             stt_language = Language.CA if reply.language == "ca" else "multi"
             await self.push_frame(STTUpdateSettingsFrame(delta=DeepgramSTTService.Settings(language=stt_language),
@@ -530,7 +528,6 @@ async def run_voice(socket, stream_sid: str, controller: CallController, config:
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60, connect=10, sock_read=15)) as http_session:
             stt, voices = voice_services(config, http_session)
-            controller.store.reserve(controller.state.run_id, "stt_call", 1_000_000)
             transport = FastAPIWebsocketTransport(wrapped, FastAPIWebsocketParams(
                 audio_in_enabled=True, audio_out_enabled=False, audio_in_sample_rate=16000,
                 add_wav_header=False, session_timeout=config.call_limit_s, allowed_origins=[],
@@ -538,7 +535,7 @@ async def run_voice(socket, stream_sid: str, controller: CallController, config:
             ))
             user, assistant = user_aggregators(config, vad_analyzer=SileroVADAnalyzer(sample_rate=16000))
             graph = GraphProcessor(controller, voices=voices, stt=stt, sent_signal=lambda: tape.signal_frames,
-                                   grace_s=config.completion_grace_s, paid=True,
+                                   grace_s=config.completion_grace_s,
                                    turn_timeout_s=getattr(config, "voice_turn_timeout_s", 30),
                                    response_timeout_s=getattr(config, "voice_response_timeout_s", 90))
             output = PacedAudioOutput(wrapped, stream_sid, graph,

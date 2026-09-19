@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
 import unittest
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -13,7 +10,7 @@ from pydantic import ValidationError
 
 from v2.clinic import Dispatcher, FixtureClinic
 from v2.models import CallState, Intent, Operation, TurnDecision
-from v2.store import BudgetExceeded, RunStore
+from v2.store import RunStore
 from v2.workflow import CallController
 
 NOW = datetime.fromisoformat("2026-09-19T09:00:00+02:00")
@@ -175,37 +172,12 @@ class BoundaryTests(unittest.IsolatedAsyncioTestCase):
             await Dispatcher(self.store, "simulation").execute(self.state, self.intent, "cancel", {})
 
 
-class BudgetAndSchemaTests(unittest.TestCase):
+class SchemaTests(unittest.TestCase):
     def test_untrusted_fields_and_naive_clock_are_rejected(self):
         with self.assertRaises(ValidationError):
             Operation(op="prepare", patient_id="invented")
         with self.assertRaises(ValidationError):
             CallState(call_id="call", reference_time=datetime(2026, 9, 19))
-
-    def test_budget_is_atomic_persistent_and_uncertain_cost_stays_reserved(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = str(Path(folder) / "runs.db")
-            first, second = RunStore(path), RunStore(path)
-            def reserve(i):
-                try:
-                    (first if i % 2 else second).reserve("run", "test", 10_000_000)
-                    return True
-                except BudgetExceeded:
-                    return False
-            try:
-                with ThreadPoolExecutor(max_workers=4) as pool:
-                    self.assertEqual(sum(pool.map(reserve, range(8))), 3)
-                self.assertEqual(first.budget()["remaining_microusd"], 0)
-            finally:
-                first.close()
-                second.close()
-            reopened = RunStore(path)
-            self.assertEqual(reopened.budget()["committed_microusd"], 30_000_000)
-            reopened.close()
-
-    def test_spending_cap_cannot_be_raised_silently(self):
-        with self.assertRaises(ValueError):
-            RunStore(cap_microusd=30_000_001)
 
 
 if __name__ == "__main__":

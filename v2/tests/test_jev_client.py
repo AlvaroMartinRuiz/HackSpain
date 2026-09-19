@@ -49,9 +49,8 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.events()[-1]["kind"], "model_assessment")
         self.assertIsNone(self.events()[-1]["payload"]["official_grade"])
         self.assertNotIn("PRIVATE", json.dumps(result) + json.dumps(self.events()))
-        self.assertEqual(self.store.budget()["committed_microusd"], 10_000)
 
-    async def test_invalid_input_never_reserves_or_calls(self):
+    async def test_invalid_input_never_calls_the_provider(self):
         def forbidden(_):
             raise AssertionError("network forbidden")
         adapter = self.adapter(forbidden)
@@ -67,7 +66,6 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
             await adapter.evaluate("invalid/id", self.turns)
         with self.assertRaises(PermissionError):
             await self.adapter(forbidden, replace(self.config, allow_paid=False)).evaluate(self.state.run_id, self.turns)
-        self.assertEqual(self.store.budget()["committed_microusd"], 0)
 
     async def test_config_endpoint_rejects_query_credentials_and_redirects(self):
         for url in ["https://jev.test/api?secret=private", "https://token@jev.test/api", "https://jev.test/api#token"]:
@@ -132,4 +130,3 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertEqual(self.events()[-1]["payload"]["type"], "CancelledError")
         self.assertNotIn("PRIVATE", json.dumps(self.events()))
-        self.assertEqual(self.store.budget()["committed_microusd"], 40_000)

@@ -30,7 +30,6 @@ class APITests(unittest.TestCase):
     def test_rehearsal_http_path_is_offline_and_exposes_separate_metrics(self):
         with patch.object(httpx.AsyncClient, "send", side_effect=AssertionError("network forbidden")):
             with TestClient(create_app(self.config)) as client:
-                self.assertEqual(client.get("/api/budget").status_code, 401)
                 response = client.post("/api/rehearse", headers=self.headers, json=demo_request().model_dump())
                 self.assertEqual(response.status_code, 200)
                 report = response.json()
@@ -39,8 +38,6 @@ class APITests(unittest.TestCase):
                 self.assertEqual(report["metrics"]["http_accepted"], 0)
                 self.assertIsNone(report["official_grade"])
                 self.assertEqual(report["metrics"]["audio_status"], "not_measured")
-                budget = client.get("/api/budget", headers=self.headers).json()
-                self.assertEqual(budget["committed_microusd"], 0)
                 self.assertEqual(client.get('/api/runs/' + report["run_id"], headers=self.headers).status_code, 200)
                 grade = fixture_grade(report, [("cancel", "fixture-appointment-fixture-adult"), ("book", "fixture-child")])
                 self.assertTrue(grade["passed"])
@@ -84,14 +81,12 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
             result = await VercelInterpreter(self.config, self.store, http).decide("Hello", self.state)
         self.assertEqual(result.language, "en")
-        self.assertEqual(self.store.budget()["committed_microusd"], 100_000)
 
     async def test_provider_errors_do_not_store_raw_responses(self):
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(403, text="SECRET KEY"))) as http:
             with self.assertRaises(RuntimeError):
                 await VercelInterpreter(self.config, self.store, http).decide("Hello", self.state)
         self.assertNotIn("SECRET", json.dumps(self.store.report(self.state.run_id)))
-        self.assertEqual(self.store.budget()["committed_microusd"], 100_000)
 
     async def test_no_paid_flag_means_no_provider_request(self):
         def forbidden(_request):
@@ -99,7 +94,6 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.MockTransport(forbidden)) as http:
             with self.assertRaises(PermissionError):
                 await VercelInterpreter(replace(self.config, allow_paid=False), self.store, http).decide("Hello", self.state)
-        self.assertEqual(self.store.budget()["committed_microusd"], 0)
 
     async def test_jev_assessments_do_not_become_official_grades(self):
         def answer(request):
@@ -115,7 +109,6 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         assessment = self.store.report(self.state.run_id)["events"][-1]
         self.assertEqual(assessment["kind"], "model_assessment")
         self.assertIsNone(assessment["payload"]["official_grade"])
-        self.assertEqual(self.store.budget()["committed_microusd"], 10_000)
 
 
 if __name__ == "__main__":

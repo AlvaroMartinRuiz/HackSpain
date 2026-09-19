@@ -212,7 +212,7 @@ async def main() -> int:
     if args.review and (not config.jev_url or not config.jev_token):
         parser.error("V2_JEV_URL and V2_JEV_TOKEN are required for --review")
     if (args.duel or args.review) and args.database is not None:
-        parser.error("paid experiments use the persistent project ledger; --database is offline-only")
+        parser.error("paid experiments use the project's persistent run store; --database is offline-only")
     store = RunStore(args.database or str(config.data_dir / "runs.db"))
     try:
         if args.suite:
@@ -223,7 +223,7 @@ async def main() -> int:
                     results.append({"run_id": report["run_id"], "outcome": outcome, "language": language,
                                     "passed": report["fixture_grade"]["passed"], "source": "scripted_fixture",
                                     "failure_categories": report["failure_review"]["categories"], "official_grade": None})
-            print(json.dumps({"results": results, "budget": store.budget()}))
+            print(json.dumps({"results": results}))
             return 0 if all(r["passed"] for r in results) else 1
         if args.duel:
             from v2.simulator import run_duel
@@ -250,7 +250,6 @@ async def main() -> int:
         print(f"run_id={report['run_id']}")
         print(f"fixture_pass={grade['passed']} resolved={report['metrics']['resolved']}/{report['metrics']['intents']}")
         print("official_grade=unknown; audio=not_measured")
-        print(json.dumps(store.budget()))
         return 0 if grade["passed"] and not review_failed else 1
     finally:
         store.close()

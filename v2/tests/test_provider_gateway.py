@@ -13,7 +13,7 @@ from pydantic import Field
 from v2.config import Config
 from v2.models import CallState, Intent, Offer
 from v2.providers import ProviderError, VercelInterpreter
-from v2.store import BudgetExceeded, RunStore
+from v2.store import RunStore
 
 
 def completion(content='{"language":"en","operations":[]}', **kwargs):
@@ -71,7 +71,6 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         result = await self.interpreter(answer).decide("Hello", self.state)
         self.assertEqual(result.language, "en")
         self.assertEqual(self.events("llm_usage")[0]["usage"], {"total_tokens": 12, "outputTokens": {"total": 3}})
-        self.assertEqual(self.store.budget()["committed_microusd"], 100_000)
 
     async def test_context_is_explicit_and_keeps_carried_inputs_and_offer_revision(self):
         self.state.intents["cancel"] = CarriedIntent(
@@ -131,7 +130,6 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((error["type"], error["status"], error["phase"]), ("HTTPStatusError", 429, "request"))
         self.assertIsInstance(error["elapsed_ms"], int)
         self.assertNotEqual(error["reservation"], self.events("llm_usage")[0]["reservation"])
-        self.assertEqual(self.store.budget()["committed_microusd"], 200_000)
         self.assertNotIn("PRIVATE", json.dumps(self.events("provider_error")))
 
     async def test_auth_redirect_and_long_retry_after_do_not_retry(self):
@@ -179,7 +177,6 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
     async def test_response_and_unicode_context_bounds(self):
         with self.assertRaises(ProviderError):
             await self.interpreter(lambda _: httpx.Response(200, text="x" * 32_001)).decide("Hello", self.state)
-        before = self.store.budget()["committed_microusd"]
         def forbidden(_):
             raise AssertionError("network forbidden")
         provider = self.interpreter(forbidden)
@@ -189,17 +186,6 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.state.history = [{"role": "caller", "text": "界" * 2000}] * 8
         with self.assertRaises(ValueError):
             await provider.decide("Hello", self.state)
-        self.assertEqual(self.store.budget()["committed_microusd"], before)
-
-    async def test_budget_is_checked_before_every_attempt(self):
-        limited = RunStore(cap_microusd=100_000)
-        self.addCleanup(limited.close)
-        limited.save(self.state)
-        provider = self.interpreter(lambda _: httpx.Response(503))
-        provider.store = limited
-        with self.assertRaises(BudgetExceeded):
-            await provider.decide("Hello", self.state)
-        self.assertEqual(limited.budget()["committed_microusd"], 100_000)
 
     async def test_total_attempt_deadline_and_cancellation(self):
         entered = asyncio.Event()
@@ -218,9 +204,8 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await task
         self.assertEqual(self.events("provider_error")[-1]["type"], "CancelledError")
-        self.assertEqual(self.store.budget()["committed_microusd"], 300_000)
 
-    async def test_close_is_idempotent_and_closed_or_disabled_clients_do_not_reserve(self):
+    async def test_close_is_idempotent_and_closed_or_disabled_clients_do_not_call(self):
         provider = self.interpreter(lambda _: completion())
         await asyncio.gather(provider.close(), provider.close())
         await provider.close()
@@ -229,7 +214,6 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             await provider.decide("Hello", self.state)
         with self.assertRaises(PermissionError):
             await self.interpreter(lambda _: completion(), replace(self.config, allow_paid=False)).decide("Hello", self.state)
-        self.assertEqual(self.store.budget()["committed_microusd"], 0)
 
     async def test_failed_close_is_sanitized_and_can_be_retried(self):
         provider = self.interpreter(lambda _: completion())
