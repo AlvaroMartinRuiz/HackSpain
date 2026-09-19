@@ -33,7 +33,8 @@ SCHEMAS: list[dict[str, Any]] = [
             "name": "lookup_patient",
             "description": (
                 "Search the clinic directory. Ask the caller's name if they have not said it, "
-                "or confirm a caller-id match with '¿Hablo con [full name]?'. The caller id is a "
+                "or confirm a caller-id match in their language ('Am I speaking with [full name]?' / "
+                "'¿Hablo con [full name]?'). The caller id is a "
                 "lookup field, not a reason to skip that. A name search needs the given name plus "
                 "at least one surname; a surname on its own is not enough. Fields are compared "
                 "exactly, so a misheard national id usually returns nobody — name plus date of "
