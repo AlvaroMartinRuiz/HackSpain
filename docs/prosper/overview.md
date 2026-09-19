@@ -29,8 +29,9 @@ and enough visibility to explain why the agent said what it said.
    to pay for whatever your agent runs on.
 2. **Build and rehearse.** You can dial yourself as often as you like against
    published practice cases, answers included.
-3. **Run for score** when you think you are ready. We call your agent with
-   every problem, check what it did, and your points go on the leaderboard.
+3. **Run for score** when you think you are ready. You pick one open problem;
+   we dial one private case of it. Each problem pays your first four passed
+   cases. Twelve minutes between scored runs.
 4. **Checkpoints.** Twice over the weekend the board freezes and prizes go to
    whoever is leading. Being early pays.
 5. **Sunday: the final boss.** The jury calls your agent themselves, and you

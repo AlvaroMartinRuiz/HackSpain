@@ -8,21 +8,21 @@ say so.
 
 Every problem has 3–6 **public cases** — published, fixed, answers printed on
 the problem page, dialled one at a time, worth nothing — and a pool of private
-cases generated from the same template, which is what Run All dials and what
-the leaderboard counts. See [scoring](rules.md). The one exception is
+cases generated from the same template, which is what a scored run dials and
+what the leaderboard counts. See [scoring](rules.md). The one exception is
 *The Switchboard*, which has no cases of its own: its three rows are bursts of
 problem 1.
 
 **Weight** is what a problem is worth in points. Your score is the *sum* of
 each problem's pass fraction times its weight — no percentage, no denominator
 — so *The Real Call* puts up to 5 on the board where *The Simple Booking* puts
-up to 1, and the full roster is worth 49. The Switchboard carries none: Run
-All never dials it, and it earns nothing.
+up to 1, and the full roster is worth 49. The Switchboard carries none: scored
+runs never dial it, and it earns nothing.
 
 **Open** is whether you can dial it yet. Problems are released as each is
 verified end to end against a real agent; an unopened one is absent from the
-problem list, and a Run All is only ever scored against the problems that were
-open when you ran it. This table is the roadmap — read ahead and build for it.
+problem list. A scored run is only ever one case of the problem you picked.
+This table is the roadmap — read ahead and build for it.
 
 | # | Problem | \`problem_id\` | Public | Weight | Open |
 |---|---|---|---|---|---|
@@ -81,8 +81,8 @@ field lost, and not the transcript or the audio, which open at the
 [reveal](rules.md#recordings) on Monday. No two runs pose the same case, so
 there is nothing to hard-code and nothing to look up.
 
-Run All dials private cases only, and it is the only lane the standings count.
-See [scoring](rules.md#the-two-lanes).
+A scored run dials one private case of the problem you picked. Each problem
+pays your first four passed cases. See [scoring](rules.md#the-two-lanes).
 
 ---
 
@@ -111,11 +111,9 @@ its private ones, and your agent has to pick all of them up without falling
 over. There is nothing new to book here, only more of it -- so read problem
 1's examples for what a line asks and what answers it accepts.
 
-**Run All does not dial this one.** Run All is itself parallel, so concurrency
-is already under test on every scored call; a dedicated burst inside it would
-measure the same capability twice and hand a slice of the score to
-infrastructure. It stays as a readiness check you trigger yourself, and Friday
-afternoon is when you want to find out. Public bursts are 5, 10 and 20.
+**Scored runs do not dial this one.** Concurrency is a readiness check you
+trigger yourself (public bursts of 5, 10 and 20), not a paying problem. Friday
+afternoon is when you want to find out.
 
 **Answer** problem 1's, on every line, reported as the fraction that
 succeeded. Diagnostic only; it contributes nothing to the leaderboard.

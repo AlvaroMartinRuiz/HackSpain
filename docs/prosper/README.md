@@ -1,8 +1,9 @@
 # Prosper track — official docs (local copy)
 
 Everything here was pulled from the official platform on 2026-09-18 so we can
-read it offline and grep it. **The live platform is the source of truth** — if
-something here disagrees with it, the platform wins.
+read it offline and grep it, then patched on 2026-09-19 when scored runs
+became **one problem, one call**. **The live platform is the source of truth**
+— if something here disagrees with it, the platform wins.
 
 Host: `https://hackspain.getprosperapp.com` (note: **not** `voice.getprosperapp.com`,
 which returns 403). All `/api/v1/*` routes need the team key in `X-Api-Key`.

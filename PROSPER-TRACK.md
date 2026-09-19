@@ -19,7 +19,7 @@ El modelo de voz es **un componente**, no el sistema entero. Lo que puntúa:
 - Lookups reales en el EHR (`/directory`, `/availability`, `/appointments`)
 - Validaciones antes de escribir
 - Estado por llamada (el caller cambia de opinión)
-- Concurrencia (10 sockets a la vez en Run All)
+- Un pipeline por socket (el Switchboard sigue abriendo 5/10/20)
 - Reporte correcto de acciones al final
 
 **No hay starter kit.** Montar el servidor que contesta el teléfono es parte del reto.
@@ -69,7 +69,7 @@ ngrok http 7860
 - URL free cambia al reiniciar → dominio estático con cuenta
 - Región europea (audio en frames de 20 ms)
 - El endpoint es `wss://`, no `https://`, **con path incluido**
-- Mantener el túnel levantado; Run All abre 10 sockets simultáneos
+- Mantener el túnel levantado; un scored run es un socket, el Switchboard abre hasta 20
 
 ### Registrar endpoint (dashboard)
 
@@ -89,14 +89,16 @@ Settings → Integration (no hace falta volver al desk):
 | Botón | Qué hace |
 |---|---|
 | **Call** (por caso publicado) | Práctica, no puntúa. Muestra respuesta, transcript, audio, campos fallidos |
-| **Run All** | Scored: casos privados de todos los problemas abiertos, 10 en paralelo (~18 min) |
+| **Scored run** (el problema que eliges) | Un caso privado de ese problema. Lo que sube al leaderboard |
 
 Límites:
 
 - 1 run/practice activo a la vez
 - 30 s entre practice calls
-- 15 min cooldown tras un Run All
+- **12 min** de cooldown tras un scored run
 - Máx. 3 min por llamada
+- Cada problema paga tus **primeras cuatro** llamadas aprobadas (un fallo no ocupa hueco)
+- Los Run All anteriores siguen contando; ninguna puntuación ha bajado
 
 ```bash
 curl -sS -H "X-Api-Key: $PLATFORM_API_KEY" \
@@ -124,7 +126,7 @@ Orden de mensajes entrantes:
 - `sequenceNumber`, `chunk`, `timestamp` son **strings**
 - Vuestro agente responde con `media` (y opcionalmente `mark`/`clear`; barge-in es vuestro)
 - **Un pipeline por socket** — nunca compartir sesión entre conexiones
-- Run All = 10 sockets; Switchboard = hasta 20
+- Un scored run = 1 socket; Switchboard = hasta 20
 
 ### Ventana de submission
 
@@ -291,9 +293,11 @@ puntos = Σ (fracción_pass_del_problema × peso)
 
 - Peso por problema: 1–5
 - Máximo roster completo: **49 puntos**
-- Leaderboard = **mejor Run All**, no último ni acumulado
+- Cada problema paga las **primeras 4 llamadas aprobadas** (los pases de un Run All antiguo cuentan)
+- Leaderboard = esa suma, no el último run
 - Problema 2 (Switchboard) **no puntúa**
 - Practice **no puntúa**
+- Cooldown scored: **12 min**
 
 ### Límites de llamada
 
@@ -432,7 +436,7 @@ ELEVENLABS_API_KEY=
    arranca en cualquier máquina (`run.ps1` / `run.sh`, versiones clavadas), y
    las claves son lo único que sigue viviendo en un solo portátil.
 2. Escenarios de ensayo para el problema 12 (ruido), que necesita audio real.
-3. Un Run All con margen antes del cierre del domingo a las 06:00.
+3. Scored runs de los problemas que ya pasamos en rehearsal, con margen antes del cierre del domingo a las 06:00.
 
 ---
 
@@ -441,7 +445,7 @@ ELEVENLABS_API_KEY=
 - Dashboard Prosper (Settings → Integration)
 - API reference (ReDoc): `<BASE_URL>/api/docs` o ReDoc en el host del desk
 - OpenAPI: `<BASE_URL>/api/openapi.json`
-- Problems page → botones Call / Run All
+- Problems page → Call (práctica) / scored run (el problema que eliges)
 - `public-cases.json` — casos publicados con respuestas
 
 ---
@@ -454,7 +458,7 @@ ELEVENLABS_API_KEY=
 - [ ] Endpoint registrado en dashboard
 - [ ] Practice call problema 1 pasa
 - [ ] Submit book/no-action funciona dentro de ventana 30 s
-- [ ] 10 concurrent sin compartir estado
+- [ ] 1 scored call a la vez, sin mezclar estado si el Switchboard abre 10/20
 - [ ] Switchboard 10/20 OK (readiness)
-- [ ] Primer Run All antes del checkpoint
+- [ ] Primer scored run de un problema que rehearsal ya pasa
 - [ ] Demo para jurado (console, logs, replay)

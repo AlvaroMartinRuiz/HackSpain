@@ -64,7 +64,7 @@ puerto en el que está escuchando. Está en pie cuando `/health` contesta:
 mudo justo en esa parte de la llamada.
 
 **`RELOAD=true` sólo mientras editas.** Vigila el árbol y reinicia al guardar,
-que durante un Run All es tirar las diez llamadas vivas a la vez.
+que durante un scored run tira la llamada viva, y en un Switchboard de veinte las veinte.
 
 ## Exponerlo
 
@@ -119,8 +119,9 @@ STT_PROVIDER=deepgram
 TTS_PROVIDER=deepgram
 ```
 
-El plan Creator de ElevenLabs tiene **131.000 caracteres de TTS**, unos dos
-Run All. No la uséis para ensayar frases. La lógica se itera en texto:
+El plan Creator de ElevenLabs tiene **131.000 caracteres de TTS**. Un scored
+run es una sola llamada, no un Run All de dieciocho minutos. Aun así no la
+uséis para ensayar frases. La lógica se itera en texto:
 
 ```powershell
 .\.venv\Scripts\python scripts\rehearse.py
@@ -129,11 +130,11 @@ Run All. No la uséis para ensayar frases. La lógica se itera en texto:
 Llamadas de práctica **solo** para lo que depende del audio: ruido (p12),
 interrupciones (p13), idiomas (p11).
 
-## Antes de cada Run All
+## Antes de cada scored run
 
 ```powershell
-# El cable aguanta la ráfaga más grande del set (problema 2)
-.\.venv\Scripts\python scripts\mock_call.py --calls 10 --seconds 6
+# El cable de una llamada, que es lo que ahora puntúa
+.\.venv\Scripts\python scripts\mock_call.py --calls 1 --seconds 6
 
 # Los arreglos de voz, consola y herramientas (sin modelo ni minutos de voz)
 .\.venv\Scripts\python scripts\check_fixes.py
@@ -142,13 +143,18 @@ interrupciones (p13), idiomas (p11).
 .\.venv\Scripts\python scripts\rehearse.py
 ```
 
+El Switchboard (problema 2) sigue siendo 5/10/20 a la vez y no puntúa:
+`mock_call.py --calls 10` o `--calls 20` cuando toque ese check.
+
 Pon `TTS_PROVIDER=elevenlabs` antes de puntuar. Si `mock_call` reporta alguna
 llamada sin audio, o la consola muestra errores `tts`, para y arréglalo: una
-llamada muda es un caso fallado haga lo que haga el resto.
+llamada muda es un caso fallado.
 
-Un Run All tarda unos dieciocho minutos y hay quince de espera después, así que
-sale uno cada treinta y tres. Ensaya en texto entre medias. Vigilad los
-caracteres de ElevenLabs entre un run y el siguiente.
+Un scored run es **un problema, una llamada**, y hay **doce minutos** de espera
+después. Cada problema paga las primeras cuatro aprobadas; un fallo no ocupa
+hueco, solo el cooldown. Los Run All que ya hiciste siguen contando. Ensaya en
+texto entre medias. Vigilad los caracteres de ElevenLabs entre un run y el
+siguiente.
 
 ## Cuando algo va mal
 

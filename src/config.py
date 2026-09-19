@@ -74,8 +74,8 @@ class Settings:
     host: str = field(default_factory=lambda: _env("HOST", default="127.0.0.1"))
     public_ws_url: str = field(default_factory=lambda: _env("PUBLIC_WS_URL"))
     public_console_url: str = field(default_factory=lambda: _env("PUBLIC_CONSOLE_URL"))
-    # Reload restarts the server whenever a file is saved, which during a Run All
-    # drops every live socket at once. Off unless asked for.
+    # Reload restarts the server whenever a file is saved, which during a scored
+    # call drops the live socket. Off unless asked for.
     reload: bool = field(default_factory=lambda: _bool("RELOAD", False))
     # The console behind ngrok needs this; empty means reachable from this
     # machine only.

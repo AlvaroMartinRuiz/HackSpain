@@ -41,9 +41,9 @@ interruption are entirely yours**. We implement no server-side barge-in;
 
 ### More than one call at a time
 
-One URL, many calls. A Run All opens **ten** sockets to your endpoint at once,
-each with its own `start.callSid`, overlapping for the whole conversation.
-Problem 2's largest burst opens twenty.
+One URL, many calls. A scored run opens **one** socket. Problem 2's largest
+burst still opens twenty. Until Saturday 19 September a Run All opened ten
+at once; that lane is gone, the isolation rule is not.
 
 Everything a call owns — the conversation, its `call_id`, its submission — is
 per socket. Sharing one conversation, one session object or one in-flight

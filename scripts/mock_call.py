@@ -2,7 +2,7 @@
 
 This is the readiness check for problem 2: the same Twilio Media Streams
 handshake, N sockets at once, each with its own callSid, and a report of how
-many held up. Run it before a Run All, not after.
+many held up. Run it before a Switchboard burst, not after.
 
   python scripts/mock_call.py                     one call
   python scripts/mock_call.py --calls 20          the largest burst in the set

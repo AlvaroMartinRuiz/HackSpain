@@ -67,7 +67,7 @@ Friday 18 → Sunday 20 September.
 
 1. **Register and stand up an endpoint.** Register the team, get a key, stand up an endpoint that can be called. The starter kit gets a talking agent running in minutes; everything after that is ours to build.
 2. **Build and rehearse.** Dial ourselves as often as we like against published practice cases, answers included.
-3. **Run for score** when ready. The organizers call the agent with every problem, check what it did, and points go on the leaderboard.
+3. **Run for score** when ready. Pick one open problem; they dial one private case. Each problem pays the first four passed cases. Twelve minutes between scored runs.
 4. **Checkpoints.** Twice over the weekend the board freezes and prizes go to whoever is leading. Being early pays.
 5. **Sunday: the final boss.** The jury calls the agent themselves, and we show them what we built.
 
@@ -93,7 +93,7 @@ Two things, added together.
 
 ### The leaderboard
 
-Automatic, and brutally literal. After each call the agent tells the graders what it did. Either that matches what the case accepts, or the case fails. There is no partial credit, no points for a nice conversation, and no credit for nearly. A call that correctly refuses still has to say so; silence is always wrong.
+Automatic, and brutally literal. After each call the agent tells the graders what it did. Either that matches what the case accepts, or the case fails. There is no partial credit, no points for a nice conversation, and no credit for nearly. A call that correctly refuses still has to say so; silence is always wrong. Each problem pays the first four **passed** cases; failed scored calls only cost the 12-minute cooldown. Run All results from before Saturday still count.
 
 ### The jury's final boss
 

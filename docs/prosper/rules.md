@@ -1,11 +1,16 @@
 # Scoring
 
-**Version 2.0-draft · 17 September 2026 · HackSpain, 18–20 September 2026**
+**Version 2.1 · 19 September 2026 · mid-event correction**
 
 This page is the automatic score: what passes a case, how points are counted,
 what the limits are, and what happens when a call fails. The jury's *final
 boss* is scored separately and is described in
 [what the challenge is](challenge.md#who-wins).
+
+On Saturday 19 September, while some teams were mid-run, scored dialling
+changed from **Run All** to **one problem, one call**. Existing Run All
+results still count; no score went down. The live platform is the source of
+truth if this copy disagrees.
 
 ## What passes a case
 
@@ -39,18 +44,18 @@ so a case can never expect an appointment the API would not have offered.
 **Practice** dials one published case, answer and all. As often as you like
 within the rate limit. It scores nothing.
 
-**Run All** is the scored lane: four private cases for every scored problem
-that is currently open, dialled 10 at a time. You choose nothing about it —
-the point of it is the whole open set. Take as many as you like, one at a
-time. It grows as problems open: the roster starts at two scored problems
-(8 calls, a couple of minutes) and ends at seventeen (68 calls, about
-eighteen). [The problem set](problems.md) says what is open now.
+**A scored run is one problem, one call.** You pick the problem; the harness
+dials one private case of that problem. Take as many as you like, one at a
+time, with a **12-minute cooldown** after each scored run finishes. Private
+cases are generated per run and their answers are never published.
 
-Private cases are generated per run and their answers are never published.
+Until Saturday 19 September the scored lane was **Run All**: four private
+cases for every open problem, ten sockets at once. Those results still sit on
+the board. New score comes from picking a problem and passing cases on it.
 
 While scoring is open, a private case tells you **whether it passed, whose
-failure it was, and a failure signal** such as \`missing_record\` or
-\`record_mismatch\`. It does not tell you which field lost, and it carries no
+failure it was, and a failure signal** such as `missing_record` or
+`record_mismatch`. It does not tell you which field lost, and it carries no
 transcript and no audio. Those open at the **reveal — Monday 21 September,
 00:00 Europe/Madrid** — after the event has ended. The expected values are never
 published, before the reveal or after it.
@@ -62,10 +67,12 @@ fields your record lost, the transcript and the recording, straight away. See
 ## Points
 
 Every scored problem carries a **difficulty weight from 1 to 5**, published on
-the problem list and in [the problem set](problems.md). A problem's score is
-the fraction of its four cases that passed — 0, .25, .5, .75 or 1 — times that
-weight. **Your score is the sum of those. There is no percentage and no
-denominator.**
+the problem list and in [the problem set](problems.md). **Each problem pays
+your first four passed cases** — a failed scored call does not occupy one of
+those four slots. A problem's score is the fraction of those four that you
+have passed — 0, .25, .5, .75 or 1 — times that weight. Passes from an old
+Run All count toward the four. **Your score is the sum of those. There is no
+percentage and no denominator.**
 
 \`\`\`
 points = sum over problems of (its pass fraction × its weight)
@@ -82,20 +89,19 @@ while it sat there unchanged. A sum only ever grows as you solve more, and a
 score from Friday means the same thing on Sunday.
 
 **A problem nobody attempted scores nothing**, exactly like one that was
-dialled and failed. There is no credit for what you did not get to, so
-running only the problems you are good at buys nothing. A call that never
-produced a submission is an attempted, failed case: silence is never cheaper
-than a wrong answer.
+dialled and failed. There is no credit for what you did not get to. A call
+that never produced a submission is an attempted, failed case: silence is
+never cheaper than a wrong answer. A failed scored call does not reduce a
+problem's paying slots; it only spends the cooldown.
 
-The leaderboard ranks each team's **best** Run All. Not latest, which would
-punish experimenting late on Sunday; not cumulative, which would punish
-iterating at all. Best rewards the thing the weekend is for. It is not free of
-luck — four cases per problem is a sample — so the board shows how many runs
-backed a score beside it. Once the whole roster is open, a 70%-correct agent
-has no realistic chance of a perfect 49 across 68 calls.
+The leaderboard ranks the **sum of each problem's first four passed cases**
+(including grandfathered Run All passes). Not latest run, which would punish
+experimenting late on Sunday. Existing Run All results still count and no
+score has gone down because of the lane change. Once the whole roster is
+open, four passes on every scored problem is a perfect **49**.
 
-Problem 2 scores nothing at all — it carries no weight and Run All never
-dials it. Practice calls never score either.
+Problem 2 scores nothing at all — it carries no weight and scored runs never
+dial it. Practice calls never score either.
 
 **Problems open progressively.** The set is released as each problem is
 verified end to end. What you have already earned is yours: opening a new

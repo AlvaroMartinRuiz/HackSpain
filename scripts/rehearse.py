@@ -1,6 +1,6 @@
 """Run scored-shaped scenarios through the agent as text, and check the record.
 
-A practice call costs a cooldown and a Run All costs eighteen minutes. This
+A practice call costs a cooldown and a scored run costs twelve minutes. This
 costs neither: the same brain, the same tools and the same clinic, with the
 audio taken out. It answers the only question the leaderboard asks — did the
 right record come out — and it says which field lost, which a scored case will

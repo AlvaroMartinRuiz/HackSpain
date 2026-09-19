@@ -88,7 +88,7 @@ Four things that bite teams:
 - **\`https://\` is not the endpoint.** The scheme is \`wss://\` and the path is
   whatever your server routes. Forgetting the path is the commonest mistake.
 - **Keep the tunnel up for the whole run.** A dropped connection is a failed
-  case, and Run All holds ten sockets open at once.
+  case. A scored run is one socket; problem 2's largest burst still opens twenty.
 
 ## 4. Tell us where to call you
 
@@ -119,7 +119,10 @@ two buttons:
 | Button | Where | What it does |
 | --- | --- | --- |
 | **Call** | Beside each published case on a problem's Statement | One practice call on that case. Scores nothing |
-| **Run All** | Top of the problems list | One scored run: private cases across every scored problem. This is the one the standings come from |
+| **Scored run** | On the problem you pick | One private case of that problem. This is what the standings come from |
+
+Until Saturday 19 September the scored button was **Run All** (every open
+problem, ten sockets). Those results still count.
 
 Each problem lists its public cases with their answers beside the button. For a
 practice call the submissions tab gives you the transcript, the recording, and
@@ -139,13 +142,15 @@ The problem ids behind the page are in [the problem set](problems.md).
 
 **One queued or active run at a time**, in either lane; both buttons are
 disabled while that slot is occupied. Two clocks on top of that: 30 seconds
-between practice calls, and 15 minutes after your last Run All **finished**
-before the next may start. The page counts the wait down for you. A Run All
-takes about eighteen minutes, so expect to start one roughly every thirty-three.
+between practice calls, and **12 minutes** after your last scored run
+**finished** before the next may start. The page counts the wait down for you.
+A scored run is one call, so the wait is the cooldown, not eighteen minutes of
+dialling.
 
 Practice is where the feedback is. A **scored** case tells you only whether it
 passed, whose failure it was and a failure signal until the reveal on Monday,
-so debug against published cases and spend Run Alls on measuring. See
+so debug against published cases and spend scored runs on problems you can
+already pass. Each problem pays your first four passed cases. See
 [scoring](rules.md).
 
 ## 6. What to build first

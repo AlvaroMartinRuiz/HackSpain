@@ -62,7 +62,9 @@ def _is_local(scope: Scope, headers: dict[bytes, bytes]) -> bool:
 
 
 def _matches(token: str, offered: str) -> bool:
-    return bool(offered) and hmac.compare_digest(token.encode(), offered.encode())
+    if not offered or len(token) != len(offered):
+        return False
+    return hmac.compare_digest(token.encode(), offered.encode())
 
 
 def _header(headers: dict[bytes, bytes], name: bytes) -> str:
