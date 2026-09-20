@@ -12,14 +12,15 @@ build/
 *.log
 .DS_Store
 
-# Call history is per-machine; the clinic catalogue is committed on purpose.
-data/calls.db
-data/calls.db-*
+# The call history and the desk file are committed so a clone can replay the
+# demo. Their sqlite sidecars are per-process and must not be: a -wal from
+# another machine is read as pending writes against a database it never saw.
+data/calls.db-shm
+data/calls.db-wal
 data/ops-smoke.db
 data/ops-smoke.db-*
 data/recordings/
 data/emails/
-data/known_patients.json
 
 # Local IDE / review dumps. Never ship these.
 .cursor/
