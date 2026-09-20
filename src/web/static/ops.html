@@ -52,7 +52,6 @@
       </div>
       <div class="page-actions">
         <a class="btn" href="#/talk" data-nav="talk"><span class="h-icon" data-icon="metric-live"></span>Start a test call</a>
-        <a class="btn ghost" href="/demo" target="socketwizard-stage">Demo stage ↗</a>
         <button type="button" class="btn ghost" id="btn-concurrency" title="Opens 6 silent dummy lines so the Live grid fills">Fill the floor (6 lines)</button>
       </div>
     </div>
@@ -62,15 +61,6 @@
       Use it to show several lines at once on the grid below.
     </p>
     <details class="system-details"><summary>System configuration</summary><div class="pills" id="pills"></div></details>
-
-    <div class="demo-banner hidden" id="demo-banner">
-      <div>
-        <p class="eyebrow">Sample call · synthetic data</p>
-        <h3>Elena García · Appointment request</h3>
-        <p>Spanish and Catalan · Dermatology · Local simulation</p>
-      </div>
-      <button type="button" class="btn" id="btn-demo-story">Open example call</button>
-    </div>
 
     <section class="kpis" id="kpis"></section>
     <div class="lang-strip" id="lang-strip"></div>
@@ -190,13 +180,11 @@
   <div class="page talk-page">
     <div class="page-head">
       <div>
-        <p class="eyebrow">Live demo</p>
-        <h2>You are the caller</h2>
+        <p class="eyebrow">Talk</p>
+        <h2>Try the front desk</h2>
         <p class="lede">
-          This is the patient phone. The other column is the clinic screen for
-          the same call. Drop <code>caller.jpg</code> in
-          <code>src/web/static/assets</code> for the live demo photo.
-          Headphones on.
+          Speak as the caller and watch the clinic screen update live for the
+          same call. Use headphones to avoid feedback.
         </p>
       </div>
     </div>
@@ -205,11 +193,6 @@
       <aside class="caller-stage phone-stage" id="caller-stage" data-state="idle">
         <div class="phone-shell">
           <p class="eyebrow">Patient phone</p>
-          <div class="caller-photo" id="caller-photo-wrap">
-            <img src="/static/assets/caller.jpg" alt="Live demo photo" id="caller-photo" />
-            <div class="caller-fallback" aria-hidden="true"></div>
-          </div>
-          <p class="photo-hint" id="photo-hint">Add <code>src/web/static/assets/caller.jpg</code> for the on-stage photo.</p>
           <h3>Clínica Arenal</h3>
           <p class="caller-state" id="caller-state">Idle</p>
           <p class="talk-hint" id="talk-status">The clinic greets as soon as you pick up.</p>
@@ -237,13 +220,18 @@
         <section class="clinic-screen" id="clinic-screen">
           <div class="clinic-head">
             <p class="eyebrow">Clinic screen</p>
-            <h3>What Reception sees</h3>
+            <div class="receptionist-profile">
+              <img src="/static/assets/receptionist.jpg" alt="Socket Wizard receptionist" />
+              <div>
+                <h3>AI Reception</h3>
+                <p class="receptionist-role">AI receptionist · Clínica Arenal</p>
+              </div>
+            </div>
             <p class="lede" id="clinic-screen-lede">Waiting for you to call.</p>
           </div>
           <div class="clinic-body" id="clinic-preview"></div>
           <div class="clinic-foot">
             <button type="button" class="btn" id="btn-open-desk">Open full reception ↗</button>
-            <a class="btn ghost" href="/demo" target="socketwizard-stage">Demo stage ↗</a>
           </div>
         </section>
       </div>

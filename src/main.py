@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.agent.llm import LLMClient
@@ -154,9 +154,9 @@ async def ops() -> FileResponse:
 
 
 @app.get("/demo", include_in_schema=False)
-async def public_demo() -> FileResponse:
-    """Cinematic live-call stage for the jury recording. Same events as /ops."""
-    return FileResponse(STATIC_DIR / "stage.html")
+async def public_demo() -> RedirectResponse:
+    """Keep old demo links inside the single Talk experience."""
+    return RedirectResponse(url="/#/talk", status_code=307)
 
 
 @app.get("/console", include_in_schema=False)

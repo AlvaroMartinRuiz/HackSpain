@@ -285,7 +285,6 @@ function renderOverview(overview) {
 
   renderStats(overview.stats);
   renderAgents();
-  if (state.demoStory) ingestDemoStory(state.demoStory);
   renderCalls();
   renderRecent();
   renderDeskBoard();
@@ -1476,56 +1475,6 @@ el("btn-concurrency")?.addEventListener("click", async () => {
   }
 });
 
-async function loadDemoStory() {
-  if (!DEMO) return;
-  try {
-    const response = await fetch("/api/console/demo/story");
-    if (!response.ok) return;
-    ingestDemoStory(await response.json());
-    if (state.selected === state.demoStory.call_id) {
-      state.detail = state.demoStory;
-      renderDetail();
-    }
-    renderCalls();
-    renderRecent();
-    const banner = el("demo-banner");
-    if (banner) banner.classList.remove("hidden");
-  } catch (error) {
-    /* demo story is optional when a live call is already on the floor */
-  }
-}
-
-function ingestDemoStory(story) {
-  state.demoStory = story;
-  const patient = story.patient || {};
-  mergeSummary({
-    call_id: story.call_id,
-    status: story.status || "rehearsed",
-    from_number: story.from_number,
-    language: story.language,
-    duration_s: story.duration_s,
-    started_at: "2026-09-20T10:01:00+02:00",
-    patient: {
-      name: patient.full_name,
-      insurer: patient.insurer,
-      national_id: patient.national_id,
-      patient_id: patient.patient_id,
-    },
-    actions: (story.submissions || []).map((row) => ({
-      action: row.action, accepted: row.accepted, status: row.status,
-    })),
-    turns: (story.transcript || []).filter((turn) => turn.role === "agent").length,
-    interruptions: story.product && story.product.resolution
-      ? story.product.resolution.interruptions
-      : 0,
-    product: story.product,
-  });
-}
-
-el("btn-demo-story")?.addEventListener("click", () => {
-  if (state.demoStory) selectCall(state.demoStory.call_id);
-});
-
 el("btn-open-desk")?.addEventListener("click", () => {
   const id = window.Talk && Talk.currentId && Talk.currentId();
   const hash = id ? `#/desk/calls/${encodeURIComponent(id)}` : "#/desk";
@@ -1602,6 +1551,5 @@ loadAssets().then(() => {
   applyRoute();
   refreshOverview();
   connect();
-  loadDemoStory();
 });
 setInterval(tickClocks, 500);

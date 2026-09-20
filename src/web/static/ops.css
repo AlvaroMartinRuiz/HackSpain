@@ -1278,7 +1278,18 @@ body[data-desk="reception"] .calls-table td:nth-child(7) {
   display: flex;
   flex-direction: column;
 }
-.clinic-head h3 { margin: 4px 0 0; font-family: var(--display); font-size: 22px; }
+.receptionist-profile { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+.receptionist-profile img {
+  width: 96px; height: 96px; flex: 0 0 auto;
+  object-fit: cover; object-position: 50% 14%;
+  border-radius: 50%; border: 2px solid hsl(var(--emerald-bg));
+  box-shadow: var(--shadow-sm);
+}
+.clinic-head h3 { margin: 0; font-family: var(--display); font-size: 22px; }
+.receptionist-role { margin: 3px 0 0; color: var(--muted-text); font-size: 12px; font-weight: 600; }
+@media (max-width: 640px) {
+  .receptionist-profile img { width: 78px; height: 78px; }
+}
 .clinic-head .lede { margin: 6px 0 0; }
 .clinic-body {
   flex: 1;
