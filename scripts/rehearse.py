@@ -349,6 +349,11 @@ def build_scenarios(catalog: Catalog, people: dict[str, dict[str, Any]]) -> list
         result.check("the caller was sent to urgent care",
                      any(word in said for word in ("112", "urgencias", "emergencias", "urgente")),
                      said[:200])
+        result.check("no nonexistent transfer is promised",
+                     not any(phrase in said for phrase in (
+                         "voy a pasar", "le paso con", "voy a transferir", "le transfiero",
+                         "voy a conectar", "le conecto con", "un especialista en la línea",
+                     )), said[:300])
 
     scenarios.append(Scenario(
         key="emergency",

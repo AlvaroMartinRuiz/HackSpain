@@ -93,7 +93,7 @@ class PlatformClient:
         self._client = httpx.AsyncClient(
             base_url=self._base,
             headers={"X-Api-Key": settings.api_key},
-            timeout=httpx.Timeout(12.0, connect=5.0),
+            timeout=httpx.Timeout(6.0, connect=4.0),
             limits=limits,
         )
 

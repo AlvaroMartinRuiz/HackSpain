@@ -212,11 +212,15 @@ function renderTabs() {
     : '<div class="entry"><div class="trace">Sin herramientas todavía.</div></div>';
 
   const submissions = detail.submissions || [];
+  const emails = detail.followup_emails || [];
   const clinic = (detail.clinic_calls || []).slice(-12);
   el("tab-record").innerHTML =
     (submissions.length
       ? submissions.map(submissionRow).join("")
       : '<div class="entry"><div class="trace">Nada enviado todavía.</div></div>') +
+    (emails.length
+      ? `<div class="group-label">Correo de seguimiento</div>` + emails.map(followupRow).join("")
+      : "") +
     (clinic.length
       ? `<div class="group-label">Consultas al EHR</div>` + clinic.map(clinicRow).join("")
       : "");
@@ -253,6 +257,18 @@ function submissionRow(submission) {
     <div class="head"><b class="${cls === "ok" ? "stage" : "reason"}">${escapeHtml(submission.action)}</b>
     <span class="ms">HTTP ${submission.status} · ${submission.elapsed_ms ?? "?"} ms${retries}</span></div>
     <pre>${escapeHtml(pretty(submission.payload))}</pre>
+  </div>`;
+}
+
+function followupRow(email) {
+  const sent = email.sent;
+  const to = (email.to || []).join(", ") || "solo vista previa";
+  const status = sent ? "enviado" : (email.reason || "guardado");
+  return `<div class="entry">
+    <div class="head"><b class="${sent ? "stage" : "reason"}">${escapeHtml(email.action || "correo")}</b>
+    <span class="ms">${escapeHtml(status)}</span></div>
+    <div class="trace">${escapeHtml(email.subject || "")} · ${escapeHtml(to)}</div>
+    ${email.text ? `<pre>${escapeHtml(email.text)}</pre>` : ""}
   </div>`;
 }
 
@@ -312,6 +328,10 @@ function applyEvent(message) {
     case "submit":
       detail.submissions = detail.submissions || [];
       detail.submissions.push(payload);
+      break;
+    case "followup_email":
+      detail.followup_emails = detail.followup_emails || [];
+      detail.followup_emails.push(payload);
       break;
     case "patient_identified":
       detail.patient_full = payload.patient;

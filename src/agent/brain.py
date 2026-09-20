@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 import unicodedata
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, Optional
 
 from src.agent import phrases
@@ -21,14 +23,22 @@ ABBREVIATION_END = re.compile(r"\b(?:dr|dra|sr|sra|mr|mrs|ms)\.$", re.IGNORECASE
 SOFT_BREAK = re.compile(r"(?<=[,;:])\s+")
 MAX_HISTORY_MESSAGES = 26
 SOFT_FLUSH_CHARS = 130
+# If the model has not spoken yet, fill the line so the harness does not
+# hang up for "no audible audio". HOLD is cached, so it is cheap.
+HOLD_IF_QUIET_S = settings.agent_hold_s
 # Hold only a filler opener ("Thank you.") so it rides with the next sentence.
 # A real short line ("¿Hablo con Ella Smith?") must not wait for the LLM to finish.
 _FILLER_OPENER = re.compile(
     r"^(thank you(?:,\s+[\wÀ-ÿ'-]+)?|thanks|i understand|great(?:,\s+[\wÀ-ÿ'-]+)?|"
-    r"of course|ok|okay|de acuerdo|por supuesto|vale|perfecto|entendido|"
+    r"of course|ok|okay|i can help with that|i can help you with that|"
+    r"de acuerdo|por supuesto|vale|perfecto|entendido|"
     r"d['']acord|moltes gracies)\.?$",
     re.IGNORECASE,
 )
+
+
+class TurnInterrupted(Exception):
+    """The caller resumed before this answer was finished."""
 
 
 class Agent:
@@ -41,6 +51,7 @@ class Agent:
         ]
         self._buffer = ""
         self._pending_briefings: list[str] = []
+        self._held = False
         # Matches the session's starting language, so the first real detection is
         # what adds the "current language" note, not the default.
         self._language = settings.default_language
@@ -55,6 +66,7 @@ class Agent:
     async def handle(self, text: str) -> None:
         """One caller turn, start to finish."""
         started = time.perf_counter()
+        generation = self.session._generation
         self.messages.append({"role": "user", "content": text})
         self._trim()
 
@@ -65,65 +77,100 @@ class Agent:
             await self.session.note_response_latency(int((time.perf_counter() - started) * 1000))
             return
 
+        await self.session.record("agent_thinking", {})
         spoke = False
-        for round_index in range(settings.llm_max_tool_rounds):
-            try:
-                completion = await self._run_round()
-            except LLMError as exc:
-                await self.session.record("error", {"where": "llm", "detail": str(exc)})
-                await self.session.say(phrases.pick(phrases.MODEL_DOWN, self.session.language))
-                return
+        self._held = False
+        filler = asyncio.create_task(self._hold_if_quiet(), name="hold-if-quiet")
+        try:
+            for round_index in range(settings.llm_max_tool_rounds):
+                try:
+                    completion = await self._run_round(generation)
+                except TurnInterrupted:
+                    await self.session.record("decision", {"stage": "stale_response_stopped"})
+                    return
+                except LLMError as exc:
+                    await self.session.record("error", {"where": "llm", "detail": str(exc)})
+                    await self.session.say(phrases.pick(phrases.MODEL_DOWN, self.session.language))
+                    return
 
-            spoke = spoke or bool(completion.text.strip())
+                spoke = spoke or bool(completion.text.strip())
+                if generation != self.session._generation:
+                    return
 
-            if not completion.wants_tools:
-                if completion.text.strip():
-                    self.messages.append({"role": "assistant", "content": completion.text})
-                break
+                if not completion.wants_tools:
+                    if completion.text.strip():
+                        self.messages.append({"role": "assistant", "content": completion.text})
+                    break
 
-            self.messages.append({
-                "role": "assistant",
-                "content": completion.text or None,
-                "tool_calls": [call.as_message_call() for call in completion.tool_calls],
-            })
-
-            for call in completion.tool_calls:
-                await self._run_tool(call.id, call.name, call.parsed_arguments())
-
-            for briefing in self._pending_briefings:
-                self.messages.append({"role": "system", "content": briefing})
-            self._pending_briefings.clear()
-
-            if not spoke:
-                await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
-                spoke = True
-
-            if round_index == settings.llm_max_tool_rounds - 1:
-                await self.session.record("error", {
-                    "where": "tool_loop", "detail": "hit the tool round cap",
+                self.messages.append({
+                    "role": "assistant",
+                    "content": completion.text or None,
+                    "tool_calls": [call.as_message_call() for call in completion.tool_calls],
                 })
 
-        if not spoke:
-            await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
+                for call in completion.tool_calls:
+                    if generation != self.session._generation:
+                        self.messages.append({"role": "tool", "tool_call_id": call.id,
+                                              "content": '{"skipped":"caller interrupted"}'})
+                    else:
+                        await self._run_tool(call.id, call.name, call.parsed_arguments())
+
+                for briefing in self._pending_briefings:
+                    self.messages.append({"role": "system", "content": briefing})
+                self._pending_briefings.clear()
+                if generation != self.session._generation:
+                    return
+
+                if round_index == settings.llm_max_tool_rounds - 1:
+                    await self.session.record("error", {
+                        "where": "tool_loop", "detail": "hit the tool round cap",
+                    })
+
+            if not spoke:
+                await self._say_hold()
+        finally:
+            filler.cancel()
 
         await self.session.note_response_latency(int((time.perf_counter() - started) * 1000))
 
-    async def _run_round(self) -> Completion:
+    async def _say_hold(self) -> None:
+        """At most one filler per caller turn, in the language already on the line."""
+        if self._held or self.session.is_speaking:
+            return
+        self._held = True
+        await self.session.say(phrases.pick(phrases.HOLD, self.session.language))
+
+    async def _hold_if_quiet(self) -> None:
+        """Keep audible audio on the line while the model or tools are still working."""
+        try:
+            await asyncio.sleep(HOLD_IF_QUIET_S)
+        except asyncio.CancelledError:
+            return
+        if (self.session.is_speaking or self.session.text_mode
+                or self.session._caller_speaking or self.session._turn_parts
+                or self.session._pending_turn):
+            return
+        await self._say_hold()
+
+    async def _run_round(self, generation: Optional[int] = None) -> Completion:
         """Stream one completion, speaking each sentence as it lands."""
         self._buffer = ""
         speech_parts: list[str] = []
         completion: Optional[Completion] = None
 
-        async for kind, value in self.llm.stream(self._sound_history(), self.tools.schemas()):
-            if kind == "text":
-                self._buffer += value
-                for sentence in self._drain():
-                    speech_parts.append(sentence)
-                    if _ready_to_speak(speech_parts):
-                        await self.session.say(" ".join(speech_parts))
-                        speech_parts.clear()
-            else:
-                completion = value
+        async with aclosing(self.llm.stream(self._sound_history(), self.tools.schemas())) as stream:
+            async for kind, value in stream:
+                if generation is not None and generation != self.session._generation:
+                    raise TurnInterrupted()
+                if kind == "text":
+                    self._buffer += value
+                    for sentence in self._drain():
+                        speech_parts.append(sentence)
+                        if _ready_to_speak(speech_parts):
+                            await self.session.say(" ".join(speech_parts))
+                            speech_parts.clear()
+                else:
+                    completion = value
 
         tail = self._buffer.strip()
         if tail:
@@ -175,6 +222,7 @@ class Agent:
 
     async def _run_tool(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
         started = time.perf_counter()
+        await self.session.record("tool_started", {"name": name, "arguments": arguments})
         try:
             result = await self.tools.dispatch(name, arguments)
         except Exception as exc:  # a broken tool must not take the call with it
@@ -185,7 +233,8 @@ class Agent:
         await self.session.record("tool_call", {
             "name": name,
             "arguments": arguments,
-            "result": _clip(result),
+            # Product views and replay need fields, not a truncated JSON string.
+            "result": result,
             "elapsed_ms": elapsed,
         })
         self.messages.append({
@@ -297,14 +346,7 @@ class Agent:
 def _as_json(value: Any) -> str:
     import json
 
-    return json.dumps(value, ensure_ascii=False, default=str)[:4000]
-
-
-def _clip(value: Any, limit: int = 1200) -> Any:
-    text = _as_json(value)
-    if len(text) <= limit:
-        return value
-    return {"truncated": True, "preview": text[:limit]}
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 
 def _fold_speech(text: str) -> str:

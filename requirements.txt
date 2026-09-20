@@ -11,3 +11,5 @@ websockets==17.1
 pydantic==2.13.5
 # Windows ships no IANA database, and every time in this challenge is Europe/Madrid.
 tzdata==2026.4
+# Turn-taking only. Clinic tools, Deepgram and ElevenLabs stay ours.
+pipecat-ai[local-smart-turn-v3]==0.0.102

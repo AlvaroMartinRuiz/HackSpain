@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.agent.llm import LLMClient
@@ -21,6 +22,7 @@ from src.obs.store import store
 from src.platform_api.client import PlatformClient
 from src.telephony import twilio_ws
 from src.voice import tts
+from src.voice import turns
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,21 +65,61 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     missing = settings.missing_voice_keys()
     logger.info(
-        "ready on :%s%s — stt=%s llm=%s tts=%s",
+        "ready on :%s%s — stt=%s llm=%s tts=%s smart-turn=%s",
         settings.port, "/ws",
         settings.stt_active,
         settings.llm_model if settings.llm_api_key else "NONE",
         settings.tts_provider,
+        turns.status(),
     )
     if missing:
         logger.warning("voice pipeline incomplete, missing: %s", ", ".join(missing))
 
     warming = asyncio.create_task(_warm_voice_cache(), name="tts-cache")
+    turning = asyncio.create_task(_warm_smart_turn(), name="smart-turn")
+    reaping = asyncio.create_task(_reap_quiet_calls(), name="reap-calls")
     try:
         yield
     finally:
         warming.cancel()
+        turning.cancel()
+        reaping.cancel()
         await llm.aclose()
+
+
+async def _reap_quiet_calls() -> None:
+    """Close harness leftovers and sockets that died without a hangup."""
+    from src.telephony.session import LIVE_SESSIONS
+
+    while True:
+        try:
+            await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            raise
+        now = time.monotonic()
+        limit = max(30.0, settings.silence_hangup_s)
+        for call in list(store.live_calls()):
+            idle = now - call.activity_since
+            session = LIVE_SESSIONS.get(call.call_id)
+            harness = str(call.call_id).startswith("check-") and session is None
+            stale = session is None and idle >= limit
+            if not harness and not stale:
+                continue
+            store.close_call(call.call_id, "finished")
+            await store.announce({"type": "call_ended", "call_id": call.call_id})
+            logger.info("reaped silent call %s", call.call_id[:24])
+
+
+async def _warm_smart_turn() -> None:
+    if not settings.smart_turn:
+        return
+    try:
+        ok = await asyncio.to_thread(turns.warm)
+        logger.info("smart-turn %s", "ready" if ok else turns.status())
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("smart-turn not warmed: %s", exc)
 
 
 async def _warm_voice_cache() -> None:
@@ -106,6 +148,17 @@ async def control() -> FileResponse:
     return FileResponse(STATIC_DIR / "ops.html")
 
 
+@app.get("/ops", include_in_schema=False)
+async def ops() -> FileResponse:
+    return FileResponse(STATIC_DIR / "ops.html")
+
+
+@app.get("/demo", include_in_schema=False)
+async def public_demo() -> RedirectResponse:
+    """Keep old demo links inside the single Talk experience."""
+    return RedirectResponse(url="/#/talk", status_code=307)
+
+
 @app.get("/console", include_in_schema=False)
 async def console() -> FileResponse:
     """The original one-call-at-a-time console, kept for the deep read of a
@@ -124,6 +177,9 @@ async def health() -> dict[str, Any]:
         "voice_ready": not settings.missing_voice_keys(),
         "missing_keys": settings.missing_voice_keys(),
         "live_calls": len(store.live_calls()),
+        "smart_turn": turns.status(),
+        "followup_email": settings.followup_email,
+        "followup_can_send": bool(settings.resend_api_key),
     }
 
 

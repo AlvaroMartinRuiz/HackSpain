@@ -22,6 +22,8 @@ from src.domain.identity import (
     peel_insurer_from_email,
     split_id_and_phone,
 )
+from src.domain.local_directory import chart as local_chart
+from src.domain.local_directory import search as local_search
 from src.domain.outcomes import pick_blocking_reason
 from src.domain.timeref import (
     MADRID,
@@ -145,6 +147,7 @@ class SchedulingEngine:
         national_id: Optional[str] = None,
         phone: Optional[str] = None,
         date_of_birth: Optional[str] = None,
+        prior_matches: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         """Look a caller up, and say plainly what the directory answered.
 
@@ -190,6 +193,18 @@ class SchedulingEngine:
                 if exc.status == 422:
                     trace.append(_needs_more(exc.detail))
                     return []
+                if exc.status == 0 and prior_matches:
+                    recovered = _filter_prior(
+                        prior_matches,
+                        name=name,
+                        national_id=national_id_clean,
+                        date_of_birth=date_of_birth,
+                    )
+                    trace.append(
+                        "directory timed out; used earlier matches from this call"
+                        + (f" ({len(recovered)})" if recovered else "")
+                    )
+                    return recovered
                 raise
 
         matches = await search(
@@ -209,6 +224,28 @@ class SchedulingEngine:
                 date_of_birth=date_of_birth,
             )
 
+        local = local_search(
+            name=name,
+            national_id=national_id_clean,
+            phone=phone,
+            date_of_birth=date_of_birth,
+        )
+        if local:
+            known_ids = {str(row.get("patient_id") or "") for row in matches}
+            known_docs = {str(row.get("national_id") or "") for row in matches}
+            added = 0
+            for row in local:
+                pid = str(row.get("patient_id") or "")
+                nid = str(row.get("national_id") or "")
+                if pid and pid in known_ids:
+                    continue
+                if nid and nid in known_docs:
+                    continue
+                matches.append(row)
+                added += 1
+            if added:
+                trace.append(f"local desk file added {added} known patient(s)")
+
         return {
             "count": len(matches),
             "matches": [_patient_brief(m) for m in matches[:6]],
@@ -220,8 +257,27 @@ class SchedulingEngine:
 
     async def patient_context(self, patient_id: str) -> dict[str, Any]:
         """The chart as a receptionist would have it open: who, and what history."""
-        upcoming = await self.client.appointments(patient_id, when="upcoming")
-        past = await self.client.appointments(patient_id, when="past")
+        if str(patient_id).startswith("local-"):
+            cached = local_chart(patient_id) or {}
+            return {
+                "patient_id": patient_id,
+                "upcoming": cached.get("upcoming") or [],
+                "past": cached.get("past") or [],
+                "visit_count": 1 if cached else 0,
+                "last_visit": None,
+            }
+        try:
+            upcoming = await self.client.appointments(patient_id, when="upcoming")
+            past = await self.client.appointments(patient_id, when="past")
+        except PlatformError:
+            cached = local_chart(patient_id) or {}
+            return {
+                "patient_id": patient_id,
+                "upcoming": cached.get("upcoming") or [],
+                "past": cached.get("past") or [],
+                "visit_count": cached.get("visit_count") or 0,
+                "last_visit": None,
+            }
         return {
             "patient_id": patient_id,
             "upcoming": [self._describe_appointment(a) for a in upcoming],
@@ -755,6 +811,25 @@ def _needs_more(detail: Any) -> str:
     if isinstance(detail, dict) and detail.get("detail"):
         return f"directory needs more: {detail['detail']}"
     return "directory needs a given name plus a surname, or an exact id, phone or date of birth"
+
+
+def _filter_prior(
+    prior: list[dict[str, Any]],
+    name: Optional[str] = None,
+    national_id: Optional[str] = None,
+    date_of_birth: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Narrow people we already saw on this call when the directory hangs."""
+    hits = [dict(item) for item in prior]
+    if date_of_birth:
+        exact = [item for item in hits if str(item.get("date_of_birth") or "") == date_of_birth]
+        if exact:
+            hits = exact
+    if national_id:
+        by_id = [item for item in hits if str(item.get("national_id") or "") == national_id]
+        if by_id:
+            hits = by_id
+    return hits
 
 
 def _distinguishers(matches: list[dict[str, Any]]) -> list[str]:

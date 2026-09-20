@@ -29,9 +29,13 @@ MAX_FINISHED_CALLS = 60
 ACTIVITY_BY_EVENT = {
     "caller_speaking": "listening",
     "stt_partial": "listening",
+    "turn_gate": "listening",
     "stt_final": "thinking",
+    "turn_committed": "thinking",
+    "agent_thinking": "thinking",
     "interruption": "listening",
     "llm": "thinking",
+    "tool_started": "thinking",
     "tool_call": "thinking",
     "clinic_call": "thinking",
     "agent_said": "speaking",
@@ -66,7 +70,9 @@ class LiveCall:
     clinic_calls: list[dict[str, Any]] = field(default_factory=list)
     decisions: list[dict[str, Any]] = field(default_factory=list)
     submissions: list[dict[str, Any]] = field(default_factory=list)
+    followup_emails: list[dict[str, Any]] = field(default_factory=list)
     patient: Optional[dict[str, Any]] = None
+    chart: Optional[dict[str, Any]] = None
     intent: Optional[str] = None
     errors: list[dict[str, Any]] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=lambda: {
@@ -118,6 +124,7 @@ class LiveCall:
                 for s in self.submissions
             ],
             "errors": len(self.errors),
+            "product": _product_snapshot(self),
         }
 
     def _final_duration(self) -> float:
@@ -136,6 +143,7 @@ class LiveCall:
             "clinic_calls": self.clinic_calls,
             "decisions": self.decisions,
             "submissions": self.submissions,
+            "followup_emails": self.followup_emails,
             "patient_full": self.patient,
             "errors": self.errors,
             "events": list(self.events),
@@ -323,7 +331,7 @@ class CallStore:
         if activity is not None and activity != call.activity:
             call.activity = activity
             call.activity_since = time.monotonic()
-        if kind == "tool_call":
+        if kind in ("tool_started", "tool_call"):
             call.current_tool = payload.get("name")
         elif kind in ("agent_said", "agent_turn_end"):
             call.current_tool = None
@@ -356,6 +364,14 @@ class CallStore:
         elif kind == "tool_call":
             call.tool_calls.append({**payload, "ts": _now_iso()})
             call.metrics["tool_calls"] += 1
+            if payload.get("name") == "open_chart":
+                result = payload.get("result") or {}
+                call.chart = {
+                    "visit_count": result.get("visit_count"),
+                    "last_visit": result.get("last_visit"),
+                    "upcoming": result.get("upcoming"),
+                    "recent_past": result.get("recent_past"),
+                }
         elif kind == "clinic_call":
             call.clinic_calls.append({**payload, "ts": _now_iso()})
             call.metrics["clinic_calls"] += 1
@@ -365,8 +381,12 @@ class CallStore:
                 call.stage = payload["stage"]
         elif kind == "submit":
             call.submissions.append({**payload, "ts": _now_iso()})
+        elif kind == "followup_email":
+            call.followup_emails.append({**payload, "ts": _now_iso()})
         elif kind == "patient_identified":
             call.patient = payload.get("patient")
+            if payload.get("visit_count") is not None:
+                call.chart = {**(call.chart or {}), "visit_count": payload.get("visit_count")}
         elif kind == "intent":
             call.intent = payload.get("intent")
         elif kind == "llm":
@@ -456,20 +476,37 @@ class CallStore:
             interruptions += call.metrics["interruptions"]
 
         submitted = [call for call in recent if call.submissions]
-        accepted = [
-            call for call in recent
-            if any(s.get("accepted") for s in call.submissions)
-        ]
         by_activity = {name: 0 for name in ACTIVITIES}
         for call in live:
             by_activity[call.activity] = by_activity.get(call.activity, 0) + 1
+
+        languages: dict[str, int] = {}
+        durations: list[float] = []
+        stt_errors = llm_errors = tts_errors = safety = 0
+        for call in live + recent:
+            languages[call.language] = languages.get(call.language, 0) + 1
+            durations.append(call.duration_s if call.ended_at is None else call._final_duration())
+            for err in call.errors:
+                where = str(err.get("where") or "")
+                if where.startswith("stt") or "stt" in where:
+                    stt_errors += 1
+                elif where.startswith("llm") or where == "llm":
+                    llm_errors += 1
+                elif where.startswith("tts"):
+                    tts_errors += 1
+            for submit in call.submissions:
+                if submit.get("action") == "escalate":
+                    safety += 1
 
         return {
             "live": len(live),
             "peak_concurrency": self._peak_concurrency,
             "recent": len(recent),
             "with_submission": len(submitted),
-            "with_accepted_submission": len(accepted),
+            "with_accepted_submission": sum(
+                1 for call in live + recent for s in call.submissions
+                if s.get("accepted") and not s.get("dry_run")
+            ),
             "silent_calls": len([c for c in recent if not c.submissions]),
             "median_response_ms": _median(all_latencies),
             "p90_response_ms": _percentile(all_latencies, 90),
@@ -478,6 +515,12 @@ class CallStore:
             "median_llm_ms": _median(llm_latencies),
             "median_tts_first_byte_ms": _median(tts_latencies),
             "calls_with_errors": len([c for c in live + recent if c.errors]),
+            "languages": languages,
+            "average_duration_s": round(sum(durations) / len(durations), 1) if durations else None,
+            "stt_errors": stt_errors,
+            "llm_errors": llm_errors,
+            "tts_errors": tts_errors,
+            "safety_escalations": safety,
         }
 
 
@@ -518,7 +561,20 @@ def _patient_line(patient: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]
         ).strip(),
         "insurer": patient.get("insurer"),
         "has_visited_before": patient.get("has_visited_before"),
+        "national_id": patient.get("national_id"),
+        "phone": patient.get("phone"),
+        "email": patient.get("email"),
+        "date_of_birth": patient.get("date_of_birth"),
+        "note": patient.get("note"),
     }
+
+
+def _product_snapshot(call: LiveCall) -> dict[str, Any]:
+    from src.obs.product import overlay_from_call
+    try:
+        return overlay_from_call(call)
+    except Exception:
+        return {}
 
 
 store = CallStore()

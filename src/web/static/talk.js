@@ -15,6 +15,8 @@ const Talk = (() => {
   let processor = null;
   let sendTimer = null;
   let callId = null;
+  let lastId = null;
+  let turns = [];
   let streamSid = "";
   let sequence = 2;
   let pending = new Float32Array(0);
@@ -23,6 +25,13 @@ const Talk = (() => {
 
   function $(id) {
     return document.getElementById(id);
+  }
+
+  function setCallerVisual(mode, text) {
+    const stage = $("caller-stage");
+    if (stage) stage.dataset.state = mode;
+    const label = $("caller-state");
+    if (label && text) label.textContent = text;
   }
 
   function setStatus(text, kind) {
@@ -146,13 +155,24 @@ const Talk = (() => {
     };
   }
 
+  function pingPreview() {
+    if (typeof window.renderClinicPreview === "function") window.renderClinicPreview();
+  }
+
   function appendLog(role, text) {
     const log = $("talk-log");
     if (!log || !text) return;
+    turns.push({ role, text });
     log.hidden = false;
-    const who = role === "agent" ? "Agent" : "You";
-    log.textContent += (log.textContent ? "\n" : "") + `${who}: ${text}`;
+    const line = document.createElement("div");
+    line.className = `phone-line ${role === "agent" ? "agent" : "you"}`;
+    const who = document.createElement("em");
+    who.textContent = role === "agent" ? "Clinic" : "You";
+    line.appendChild(who);
+    line.appendChild(document.createTextNode(text));
+    log.appendChild(line);
     log.scrollTop = log.scrollHeight;
+    pingPreview();
   }
 
   function showCallLink(id) {
@@ -160,7 +180,7 @@ const Talk = (() => {
     const link = $("talk-call-link");
     if (!line || !link) return;
     line.hidden = false;
-    link.href = `#/calls/${encodeURIComponent(id)}`;
+    link.href = `#/desk/calls/${encodeURIComponent(id)}`;
   }
 
   async function pickup() {
@@ -205,6 +225,8 @@ const Talk = (() => {
     mute.connect(captureCtx.destination);
 
     callId = crypto.randomUUID();
+    lastId = callId;
+    turns = [];
     streamSid = `MZ${callId.replace(/-/g, "").slice(0, 30)}`;
     sequence = 2;
     pending = new Float32Array(0);
@@ -239,8 +261,10 @@ const Talk = (() => {
     }
 
     const fromNumber = ($("talk-number").value || "").trim();
-    const dry = $("talk-dry").checked;
-    const custom = { call_id: callId, dry_run: dry ? "true" : "false" };
+    if (fromNumber) {
+      try { localStorage.setItem("socketwizard-caller", fromNumber); } catch { /* private mode */ }
+    }
+    const custom = { call_id: callId, dry_run: "true" };
     if (fromNumber) custom.from_number = fromNumber;
 
     socket.send(JSON.stringify({ event: "connected", protocol: "Call", version: "1.0.0" }));
@@ -261,11 +285,23 @@ const Talk = (() => {
     running = true;
     setButtons(true);
     showCallLink(callId);
-    $("talk-log").textContent = "";
-    $("talk-log").hidden = true;
+    const log = $("talk-log");
+    if (log) {
+      log.innerHTML = "";
+      log.hidden = true;
+    }
+    setCallerVisual("listening", "Listening");
     setStatus("On the line. Wait for the greeting, then speak.");
+    pingPreview();
     sendTimer = setInterval(() => {
       if (!running) return;
+      const playing = sources.length > 0
+        || (playCtx && playAt > playCtx.currentTime + 0.08);
+      if (playing) {
+        pending = new Float32Array(0);
+        sendMedia(Uint8Array.from({ length: FRAME_SAMPLES }, () => SILENCE));
+        return;
+      }
       const frame = takeFrame() || Uint8Array.from({ length: FRAME_SAMPLES }, () => SILENCE);
       sendMedia(frame);
     }, FRAME_MS);
@@ -312,16 +348,27 @@ const Talk = (() => {
     }
     pending = new Float32Array(0);
     setButtons(false);
+    setCallerVisual("idle", "Idle");
     if (opts.fromServer) setStatus("The agent hung up.", "ok");
     else setStatus("Hung up.");
+    pingPreview();
   }
 
   function onEvent(event) {
     if (!running || !event || event.call_id !== callId) return;
     const payload = event.payload || {};
-    if (event.kind === "stt_final" && payload.text) appendLog("caller", payload.text);
-    if (event.kind === "agent_said" && payload.text) appendLog("agent", payload.text);
-    if (event.kind === "interruption") appendLog("caller", `⟨cuts in⟩ ${payload.heard || ""}`);
+    if (event.kind === "stt_final" && payload.text) {
+      appendLog("caller", payload.text);
+      setCallerVisual("listening", "Patient speaking");
+    }
+    if (event.kind === "agent_said" && payload.text) {
+      appendLog("agent", payload.text);
+      setCallerVisual("speaking", "Agent speaking");
+    }
+    if (event.kind === "interruption") {
+      appendLog("caller", `⟨cuts in⟩ ${payload.heard || ""}`);
+      setCallerVisual("listening", "Patient interrupted");
+    }
   }
 
   return {
@@ -329,7 +376,20 @@ const Talk = (() => {
     hangup,
     onEvent,
     active: () => running,
+    currentId: () => lastId,
+    turns: () => turns,
   };
 })();
 
 window.Talk = Talk;
+
+(function restoreCallerNumber() {
+  const input = document.getElementById("talk-number");
+  if (!input || input.value) return;
+  try {
+    const saved = localStorage.getItem("socketwizard-caller");
+    if (saved) input.value = saved;
+  } catch {
+    /* private mode */
+  }
+})();

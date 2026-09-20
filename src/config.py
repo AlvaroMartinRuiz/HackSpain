@@ -111,6 +111,8 @@ class Settings:
     llm_temperature: float = field(default_factory=lambda: _float("LLM_TEMPERATURE", 0.2))
     llm_max_tool_rounds: int = field(default_factory=lambda: _int("LLM_MAX_TOOL_ROUNDS", 6))
     llm_timeout_s: float = field(default_factory=lambda: _float("LLM_TIMEOUT_S", 60.0))
+    llm_concurrency: int = field(default_factory=lambda: max(1, _int("LLM_CONCURRENCY", 8)))
+    llm_min_gap_s: float = field(default_factory=lambda: max(0.0, _float("LLM_MIN_GAP_S", 0.0)))
     # Empty skips the field (gpt-4o). Gemini 3 maps low/medium/high onto thinking_level.
     llm_reasoning_effort: str = field(
         default_factory=lambda: _env("LLM_REASONING_EFFORT", default="").lower()
@@ -164,12 +166,34 @@ class Settings:
         )
     )
     barge_in: bool = field(default_factory=lambda: _bool("BARGE_IN", True))
+    playback_lead_ms: float = field(default_factory=lambda: max(0.0, min(200.0, _float("PLAYBACK_LEAD_MS", 60.0))))
+    agent_hold_s: float = field(default_factory=lambda: max(0.0, _float("AGENT_HOLD_S", 3.0)))
+    # Pipecat LocalSmartTurn v3: wait until the caller has actually finished.
+    smart_turn: bool = field(default_factory=lambda: _bool("SMART_TURN", True))
+    smart_turn_stop_secs: float = field(
+        default_factory=lambda: _float("SMART_TURN_STOP_SECS", 1.2)
+    )
     # Nearly every caller speaks English; a detected language replaces this.
     default_language: str = field(default_factory=lambda: _env("DEFAULT_LANGUAGE", default="en").lower())
-    silence_prompt_s: float = field(default_factory=lambda: _float("SILENCE_PROMPT_S", 10.0))
-    silence_prompt_max: int = field(default_factory=lambda: _int("SILENCE_PROMPT_MAX", 2))
+    # After the 'are you still there?' prompts, hang up if nobody answers.
+    silence_hangup_s: float = field(default_factory=lambda: _float("SILENCE_HANGUP_S", 180.0))
+    # Post-call summary / appointment confirmation. Never on the scored path.
+    followup_email: bool = field(default_factory=lambda: _bool("FOLLOWUP_EMAIL", True))
+    followup_from: str = field(
+        default_factory=lambda: _env(
+            "FOLLOWUP_FROM", default="Clínica Arenal <onboarding@resend.dev>"
+        )
+    )
+    followup_copy: str = field(default_factory=lambda: _env("FOLLOWUP_COPY"))
+    resend_api_key: str = field(default_factory=lambda: _env("RESEND_API_KEY"))
+    smtp_host: str = field(default_factory=lambda: _env("SMTP_HOST", default="smtp.gmail.com"))
+    smtp_port: int = field(default_factory=lambda: _int("SMTP_PORT", 587))
+    smtp_user: str = field(default_factory=lambda: _env("SMTP_USER"))
+    smtp_password: str = field(default_factory=lambda: _env("SMTP_PASSWORD", "GMAIL_APP_PASSWORD"))
     # Synthesise the greeting and fixed lines at start-up (~300 characters).
     tts_warm_cache: bool = field(default_factory=lambda: _bool("TTS_WARM_CACHE", True))
+    # Slower TTS only when the patient note says they are hard of hearing.
+    accessibility_voice: bool = field(default_factory=lambda: _bool("ACCESSIBILITY_VOICE", True))
 
     # Design assets
     # Quiver draws SVG, not data, so it is called by scripts/generate_assets.py

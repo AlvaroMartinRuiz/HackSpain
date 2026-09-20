@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/ops.css?v=talk1" />
+<link rel="stylesheet" href="/static/ops.css?v=product7" />
 </head>
 <body data-page="live">
 
@@ -16,7 +16,7 @@
     <span class="mark" id="brand-mark" data-icon="mark-elturno"></span>
     <div>
       <h1>Socket Wizard</h1>
-      <span class="sub" id="clinic-name">Clínica Arenal</span>
+      <span class="sub" id="clinic-name">AI front desk for Clínica Arenal</span>
     </div>
   </a>
 
@@ -25,7 +25,13 @@
     <a href="#/calls" data-nav="calls">Calls</a>
     <a href="#/talk" data-nav="talk">Talk</a>
     <a href="#/rehearse" data-nav="rehearse">Rehearse</a>
+    <a href="#/reliability" data-nav="reliability">Reliability</a>
   </nav>
+
+  <div class="desk-switch" role="tablist" aria-label="Workspace">
+    <a href="#/" data-desk-link="control">Control</a>
+    <a href="#/desk" data-desk-link="reception">Reception</a>
+  </div>
 
   <div class="header-end">
     <span class="link-state" title="connection to the server">
@@ -40,19 +46,31 @@
   <div class="page">
     <div class="page-head">
       <div>
-        <p class="eyebrow">Floor</p>
-        <h2>On the line</h2>
+        <p class="eyebrow" id="live-eyebrow">Clinic operations</p>
+        <h2 id="live-title">Control</h2>
         <p class="lede" id="live-lede">The endpoint is listening.</p>
       </div>
+      <div class="page-actions">
+        <a class="btn" href="#/talk" data-nav="talk"><span class="h-icon" data-icon="metric-live"></span>Start a test call</a>
+        <button type="button" class="btn ghost" id="btn-concurrency" title="Opens 6 silent dummy lines so the Live grid fills">Fill the floor (6 lines)</button>
+      </div>
     </div>
-    <div class="pills" id="pills"></div>
+    <p class="concurrency-hint" id="concurrency-hint">
+      <b>Fill the floor</b> opens six silent dummy callers for about eight seconds.
+      They hear the greeting and stay quiet — they do not talk to the model, and they are never scored.
+      Use it to show several lines at once on the grid below.
+    </p>
+    <details class="system-details"><summary>System configuration</summary><div class="pills" id="pills"></div></details>
 
     <section class="kpis" id="kpis"></section>
+    <div class="lang-strip" id="lang-strip"></div>
+
+    <section class="desk-board" id="desk-board"></section>
 
     <section class="panel agents">
-      <h2>
+      <h2 id="live-agents-title">
         <span class="h-icon" data-icon="metric-live"></span>
-        Agents
+        Active calls
         <span class="count" id="agent-count">0</span>
         <span class="legend">
           <i class="listening">listening</i>
@@ -65,7 +83,7 @@
     </section>
 
     <section class="panel recent">
-      <h2>
+      <h2 id="recent-title">
         <span class="h-icon" data-icon="icon-transcript"></span>
         Recent calls
         <a class="panel-link" href="#/calls" data-nav="calls">View all</a>
@@ -126,24 +144,32 @@
       </div>
       <!-- Outside the head on purpose: the head is rebuilt on every event, and
            rebuilding an <audio> element stops whatever was playing. -->
+      <div id="product-context"></div>
+      <div id="product-journey"></div>
       <div id="tape"></div>
     </aside>
     <section class="call-transcript">
+      <div id="product-resolution"></div>
       <div class="transcript-head">
-        <span class="h-icon" data-icon="icon-transcript"></span> Transcript
+        <span class="h-icon" data-icon="icon-transcript"></span>
+        <span id="transcript-label">Transcript</span>
       </div>
       <div class="transcript" id="transcript"></div>
       <div class="partial" id="partial"></div>
     </section>
     <aside class="inspector">
       <div class="tabs">
-        <button type="button" class="tab active" data-tab="decisions">Decisions</button>
+        <button type="button" class="tab active" data-tab="why">Why</button>
+        <button type="button" class="tab" data-tab="safety">Safety</button>
+        <button type="button" class="tab" data-tab="decisions">Decisions</button>
         <button type="button" class="tab" data-tab="tools">
           <span class="h-icon" data-icon="icon-tool"></span> Tools
         </button>
         <button type="button" class="tab" data-tab="record">Record</button>
       </div>
-      <div class="tab-body" id="tab-decisions"></div>
+      <div class="tab-body" id="tab-why"></div>
+      <div class="tab-body hidden" id="tab-safety"></div>
+      <div class="tab-body hidden" id="tab-decisions"></div>
       <div class="tab-body hidden" id="tab-tools"></div>
       <div class="tab-body hidden" id="tab-record"></div>
     </aside>
@@ -151,42 +177,65 @@
 </section>
 
 <section class="view hidden" id="view-talk" hidden>
-  <div class="page narrow">
+  <div class="page talk-page">
     <div class="page-head">
       <div>
-        <p class="eyebrow">Sandbox</p>
-        <h2>Talk to the agent</h2>
+        <p class="eyebrow">Talk</p>
+        <h2>Try the front desk</h2>
         <p class="lede">
-          Your microphone is the caller. Same socket, same STT, same voice —
-          nothing is posted to the platform unless you uncheck dry run.
-          Use headphones or the agent's speech will come back in as barge-in.
+          Speak as the caller and watch the clinic screen update live for the
+          same call. Use headphones to avoid feedback.
         </p>
       </div>
     </div>
 
-    <form class="sheet" id="talk-form">
-      <span class="h-icon form-mark" data-icon="icon-rehearse"></span>
-      <label for="talk-number">Caller number (empty = withheld)</label>
-      <input type="text" id="talk-number" placeholder="+34600111222" spellcheck="false" autocomplete="off" />
-
-      <div class="row">
-        <label>
-          <input type="checkbox" id="talk-dry" checked />
-          Dry run — keep the record local
-        </label>
+    <div class="talk-demo">
+      <aside class="caller-stage phone-stage" id="caller-stage" data-state="idle">
+        <div class="phone-shell">
+          <p class="eyebrow">Patient phone</p>
+          <h3>Clínica Arenal</h3>
+          <p class="caller-state" id="caller-state">Idle</p>
+          <p class="talk-hint" id="talk-status">The clinic greets as soon as you pick up.</p>
+          <form class="sheet talk-sheet" id="talk-form">
+            <label for="talk-number">Your number (same one next time so they recognise you)</label>
+            <input type="text" id="talk-number" placeholder="+34600111222" spellcheck="false" autocomplete="off" />
+            <div class="row" hidden>
+              <label>
+                <input type="checkbox" id="talk-dry" checked />
+                Keep the record local
+              </label>
+            </div>
+            <div class="phone-captions" id="talk-log" hidden></div>
+            <p class="talk-hint" id="talk-call-line" hidden>
+              <a class="panel-link" id="talk-call-link" href="#/">Open this call on Reception</a>
+            </p>
+            <div class="foot">
+              <button type="submit" class="btn" id="talk-call">Call</button>
+              <button type="button" class="btn ghost" id="talk-hang" disabled>Hang up</button>
+            </div>
+          </form>
+        </div>
+      </aside>
+      <div class="talk-side">
+        <section class="clinic-screen" id="clinic-screen">
+          <div class="clinic-head">
+            <p class="eyebrow">Clinic screen</p>
+            <div class="receptionist-profile">
+              <img src="/static/assets/receptionist.jpg" alt="Socket Wizard receptionist" />
+              <div>
+                <h3>AI Reception</h3>
+                <p class="receptionist-role">AI receptionist · Clínica Arenal</p>
+              </div>
+            </div>
+            <p class="lede" id="clinic-screen-lede">Waiting for you to call.</p>
+          </div>
+          <div class="clinic-body" id="clinic-preview"></div>
+          <div class="clinic-foot">
+            <button type="button" class="btn" id="btn-open-desk">Open full reception ↗</button>
+          </div>
+        </section>
       </div>
-
-      <p class="talk-hint" id="talk-status">Idle. The agent greets as soon as you pick up.</p>
-      <pre class="talk-log" id="talk-log" hidden></pre>
-      <p class="talk-hint" id="talk-call-line" hidden>
-        <a class="panel-link" id="talk-call-link" href="#/">Open this call</a>
-      </p>
-
-      <div class="foot">
-        <button type="submit" class="btn" id="talk-call">Call</button>
-        <button type="button" class="btn ghost" id="talk-hang" disabled>Hang up</button>
-      </div>
-    </form>
+    </div>
   </div>
 </section>
 
@@ -196,10 +245,7 @@
       <div>
         <p class="eyebrow">Sandbox</p>
         <h2>Rehearse a call</h2>
-        <p class="lede">
-          Same brain, same tools, same clinic — as text, with no audio and no quota.
-          One patient turn per line.
-        </p>
+        <p class="lede">Same brain, same tools, same clinic — as text, with no audio. One patient turn per line.</p>
       </div>
     </div>
 
@@ -213,10 +259,10 @@ Next Thursday first thing, if possible.</textarea>
       <label for="rehearse-number">Caller number (empty = withheld)</label>
       <input type="text" id="rehearse-number" placeholder="+34600111222" spellcheck="false" />
 
-      <div class="row">
+      <div class="row" hidden>
         <label>
           <input type="checkbox" id="rehearse-dry" checked />
-          Dry run — keep the record local
+          Keep the record local
         </label>
       </div>
 
@@ -229,7 +275,24 @@ Next Thursday first thing, if possible.</textarea>
   </div>
 </section>
 
-<script src="/static/talk.js?v=talk2"></script>
-<script src="/static/ops.js?v=talk2"></script>
+<section class="view hidden" id="view-reliability" hidden>
+  <div class="page">
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Engineering</p>
+        <h2>Reliability</h2>
+        <p class="lede">Latency, concurrency and safety events from this process. Records stay local to Socket Wizard.</p>
+      </div>
+    </div>
+    <section class="kpis" id="reli-kpis"></section>
+    <section class="panel">
+      <h2>How we know it works</h2>
+      <div class="reli-copy" id="reli-copy"></div>
+    </section>
+  </div>
+</section>
+
+<script src="/static/talk.js?v=talk6"></script>
+<script src="/static/ops.js?v=product7"></script>
 </body>
 </html>

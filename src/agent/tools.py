@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from src.domain.catalog import age_months
 from src.domain.engine import Slot
 from src.domain.identity import normalize_provider_name, normalize_text, parse_national_id
+from src.domain.local_directory import remember as remember_patient
 from src.domain.outcomes import ALL_REASONS, is_valid_reason
 from src.domain.timeref import format_slot, now_madrid
 from src.domain.triage import triage
@@ -348,8 +349,9 @@ SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "escalate_call",
             "description": (
-                "Hand the call to a human. Use `medical_emergency` for a red flag, after telling "
-                "the caller to seek urgent care."
+                "Record an escalation request only. This does NOT transfer the call, connect "
+                "a human or summon help. Never promise a transfer. Use `medical_emergency` "
+                "for a red flag, after telling the caller to seek urgent care now."
             ),
             "parameters": {
                 "type": "object",
@@ -406,8 +408,9 @@ class ToolBox:
         result = await self.engine.identify(
             name=args.get("name"),
             national_id=args.get("national_id"),
-            phone=args.get("phone"),
+            phone=args.get("phone") or self.session.from_number,
             date_of_birth=args.get("date_of_birth"),
+            prior_matches=self.session.seen_patients,
         )
         await self.session.remember_matches(result["matches"])
         if result.get("needs_more"):
@@ -567,11 +570,16 @@ class ToolBox:
                 "end_without_booking if they still want it."
             )
             return result
+        loc = self.catalog.locations.get(location_id)
+        if loc and loc.address:
+            serving["address"] = loc.address
+            result["nearest_serving"] = serving
         result["guidance"] = (
-            "Tell the caller which site that is, in one sentence. Then pass "
-            f"`location_id={location_id}` to find_appointments. Do not pick a site from memory "
-            "or from the addresses in the briefing — the closest site that cannot serve them "
-            "is the wrong answer."
+            "Tell the caller which site that is, in one sentence"
+            + (f" ({loc.address})" if loc and loc.address else "")
+            + f". Then pass `location_id={location_id}` to find_appointments. "
+            "Do not pick a site from memory. Do not invent a bus, metro, entrance or floor: "
+            "those are not on file. If they ask how to get there, give only this address."
         )
         return result
 
@@ -614,10 +622,14 @@ class ToolBox:
             own = self.patient.get("insurer")
             insurers = ([own] if own else []) + self.named_insurers
 
-        # A Catalan speaker is booked with a doctor who speaks Catalan, whether or
-        # not the model thinks to ask for one. Only Catalan: every doctor speaks
-        # Spanish, and not every doctor speaks English.
-        language = args.get("language") or ("ca" if self.session.language == "ca" else None)
+        # Named doctor: search that person, even if they do not speak the
+        # caller's language. Unnamed search: prefer Catalan-speaking doctors
+        # when the call is in Catalan and they have slots.
+        language = args.get("language")
+        if provider_id:
+            language = None
+        elif not language and self.session.language == "ca":
+            language = "ca"
 
         # The age boundary is the clinic's rule, not the caller's problem: asking
         # for "the doctor" for an eight-year-old is paediatrics, not a refusal.
@@ -688,9 +700,11 @@ class ToolBox:
             "blocked": search.blocked,
         })
 
+        mismatch = self._named_doctor_language_warning(provider_id)
+
         if not search.found:
             self.last_reason = search.reason
-            return {
+            payload = {
                 "options": [],
                 "reason": search.reason,
                 "blocked": search.blocked,
@@ -702,10 +716,18 @@ class ToolBox:
                     "insurance plan, asking is the only way to find out."
                 ),
             }
+            if mismatch:
+                payload["language_mismatch"] = {
+                    "doctor": mismatch["doctor"],
+                    "speaks": mismatch["speaks"],
+                    "caller_language": mismatch["caller_language"],
+                }
+                payload["guidance"] = mismatch["empty"]
+            return payload
 
         self.options = {index + 1: slot for index, slot in enumerate(search.slots)}
         self.options_for = self.patient.get("patient_id")
-        return {
+        payload = {
             # Echoed so a read-back names the right person out loud.
             "searched_for": {
                 "patient_id": self.patient.get("patient_id"),
@@ -748,6 +770,14 @@ class ToolBox:
                 + "Then call book_slot with the option number they choose."
             ),
         }
+        if mismatch:
+            payload["language_mismatch"] = {
+                "doctor": mismatch["doctor"],
+                "speaks": mismatch["speaks"],
+                "caller_language": mismatch["caller_language"],
+            }
+            payload["guidance"] = mismatch["found"] + " " + payload["guidance"]
+        return payload
 
     # ---- writes -------------------------------------------------------
 
@@ -794,8 +824,9 @@ class ToolBox:
                 "site": plan.location_id,
             },
             "reference_number": None,
-            "guidance": "Read the appointment back once and close warmly. The platform did not "
-                        "provide a reference number, so never invent one.",
+            "guidance": "Read the appointment back once and ask if they need anything else. "
+                        "Mention a confirmation email only if we already have their address. "
+                        "The platform did not provide a reference number, so never invent one.",
         }
 
     async def _tool_reschedule_appointment(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -830,7 +861,8 @@ class ToolBox:
             "status": result.status,
             "confirmed": {"when": slot.start.strftime("%A %d %B, %H:%M"),
                           "doctor": slot.provider_name},
-            "guidance": "Read the new time back to the caller.",
+            "guidance": "Read the new time back to the caller. Mention a confirmation email "
+                        "only if we already have their address.",
         }
 
     async def _tool_cancel_appointment(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -860,7 +892,8 @@ class ToolBox:
             "status": result.status,
             "appointment_id": appointment_id,
             "still_on_the_chart": leftover,
-            "guidance": "Confirm this cancellation. If they asked to cancel another one as well, "
+            "guidance": "Confirm this cancellation. Mention a confirmation email only if we "
+                        "already have their address. If they asked to cancel another one as well, "
                         "call this tool again for that row. Do not cancel leftover appointments "
                         "unless they asked.",
         }
@@ -879,7 +912,8 @@ class ToolBox:
                                 "hold the call to hear it. If the id and phone arrived as one "
                                 "number, pass them as heard."}
 
-        if not args.get("confirmed") or fields != self.pending_registration:
+        short_on_time = self.session.remaining_s() < 25
+        if (not args.get("confirmed") or fields != self.pending_registration) and not short_on_time:
             # A corrected detail changes the fields, which lands back here: what
             # is registered is always exactly what the caller last heard.
             self.pending_registration = fields
@@ -893,26 +927,31 @@ class ToolBox:
                 "needs_confirmation": True,
                 "read_back": _read_back(fields, self.session.language),
                 "letter_inferred": letter_inferred,
-                "guidance": "Nothing is on file yet. Read these back in one turn: spell the given "
-                            "name and both surnames, give the id digit by digit with its letter"
-                            + (" (the caller did not say the letter; it was worked out from the "
-                               "digits, so ask them to confirm it)" if letter_inferred else "")
-                            + ", and spell the email. Ask whether it is all correct. If yes, call "
-                              "register_new_patient again with the same details and confirmed=true; "
-                              "if they correct anything, call it again with the corrected details "
-                              "and no confirmed.",
+                "guidance": "Nothing is on file yet. Confirm in one short sentence, not a list: "
+                            "full name as normal words, date of birth, id and phone as in "
+                            "read_back, email as spelled there, insurer. Then ask if that is "
+                            "correct. Do not start a second turn after the question."
+                            + (" The DNI letter was worked out from the digits; mention it once."
+                               if letter_inferred else "")
+                            + " If yes, call register_new_patient again with the same details and "
+                              "confirmed=true; if they correct anything, call it again with the "
+                              "corrected details and no confirmed.",
             }
 
         payload = {"call_id": self.session.call_id, **fields}
+        if self.session.from_number and not payload.get("phone"):
+            payload["phone"] = self.session.from_number
         result = await self.session.submit("register", payload)
+        remember_patient({**payload, "has_visited_before": True})
         await self.session.record("decision", {"stage": "registered", "payload": payload})
         return {
             "registered": result.accepted or result.duplicate,
             "status": result.status,
             "on_file": {"name": f"{fields['given_name']} {fields['first_surname']} {fields['second_surname']}",
                         "national_id": fields["national_id"]},
-            "guidance": "Confirm they are on file and say goodbye in one short utterance. "
-                        "Nothing is booked on this call; do not offer a slot or add generic filler.",
+            "guidance": "Confirm they are on file, mention the confirmation email, ask if they "
+                        "need anything else, and only then say goodbye. Do not ask if the details "
+                        "are correct. Nothing is booked on this call; do not offer a slot.",
         }
 
     async def _tool_end_without_booking(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -950,7 +989,8 @@ class ToolBox:
             "why": args.get("explanation") or "",
         })
         return {"recorded": result.accepted or result.duplicate, "reason": reason,
-                "guidance": "Tell the caller plainly why, in one sentence, and close politely."}
+                "guidance": "Tell the caller plainly why, in one sentence, then ask if they need "
+                            "anything else before goodbye."}
 
     async def _tool_escalate_call(self, args: dict[str, Any]) -> dict[str, Any]:
         reason = self._clean_reason(args.get("reason"))
@@ -961,7 +1001,10 @@ class ToolBox:
             "stage": "escalated", "reason": reason, "why": args.get("explanation") or "",
         })
         return {"recorded": result.accepted or result.duplicate, "reason": reason,
-                "guidance": "Stay on the line with them for one more sentence, then close."}
+                "guidance": "This records an escalation; it does not transfer the audio or "
+                            "connect a clinician. Never claim a specialist is on the line. "
+                            "For an emergency, tell the caller to seek urgent care now; "
+                            "do not ask them to wait for a transfer."}
 
     # ---- helpers ------------------------------------------------------
 
@@ -1074,6 +1117,37 @@ class ToolBox:
         fields, problems = self.engine.plan_registration(self.last_register_fields)
         return fields if fields and not problems else None
 
+    def _named_doctor_language_warning(self, provider_id: Optional[str]) -> Optional[dict[str, Any]]:
+        """If they named a doctor who does not speak the caller's language, say so and wait."""
+        if not provider_id:
+            return None
+        spoken = (self.session.language or "")[:2]
+        if spoken not in {"ca", "en"}:
+            return None
+        provider = self.catalog.providers.get(provider_id)
+        if provider is None or provider.speaks(spoken):
+            return None
+        label = {"ca": "Catalan", "en": "English"}[spoken]
+        return {
+            "doctor": provider.name,
+            "speaks": list(provider.languages),
+            "caller_language": spoken,
+            "found": (
+                f"{provider.name} does not speak {label}. Tell the caller that once and ask "
+                "whether they still want this doctor or prefer someone who speaks it. "
+                "Wait for their answer. If they keep this doctor, offer the times below. "
+                "If they want someone who speaks it, call find_appointments again without "
+                "provider_id."
+            ),
+            "empty": (
+                f"{provider.name} does not speak {label}. Tell the caller that once and ask "
+                "whether they still want this doctor or prefer someone who speaks it. "
+                "Wait for their answer. They currently have no free slot with this doctor. "
+                "If they want someone who speaks {label}, call find_appointments again "
+                "without provider_id. Do not ask about insurance for the language mismatch."
+            ),
+        }
+
     def fallback_reason(self) -> str:
         """The reason to report if the call ends before the model closes it."""
         if self.last_reason and is_valid_reason(self.last_reason):
@@ -1107,14 +1181,22 @@ def _spell_email(email: str, language: str = "en") -> str:
     return f"{spelled} {words['@']} {domain.replace('.', ' ' + words['.'] + ' ')}"
 
 
+def _compact_email(email: str, language: str = "en") -> str:
+    """Say the address, not every letter. Digit-by-digit email burns the call."""
+    words = _EMAIL_WORDS.get((language or "")[:2], _EMAIL_WORDS["en"])
+    local, _, domain = email.partition("@")
+    dotted = domain.replace(".", f" {words['.']} ")
+    return f"{local} {words['@']} {dotted}"
+
+
 def _read_back(fields: dict[str, Any], language: str = "en") -> dict[str, str]:
     return {
-        "given_name": _spell(fields["given_name"]),
-        "first_surname": _spell(fields["first_surname"]),
-        "second_surname": _spell(fields["second_surname"]),
-        "national_id": " ".join(fields["national_id"]),
+        "given_name": fields["given_name"],
+        "first_surname": fields["first_surname"],
+        "second_surname": fields["second_surname"],
+        "national_id": fields["national_id"],
         "date_of_birth": fields["date_of_birth"],
-        "phone": " ".join(fields["phone"]),
-        "email": _spell_email(fields["email"], language),
+        "phone": fields["phone"],
+        "email": _compact_email(fields["email"], language),
         "insurer": fields["insurer"],
     }

@@ -31,7 +31,7 @@ from src.domain.catalog import Catalog  # noqa: E402
 from src.domain.identity import dni_check_letter, normalize_text, parse_national_id  # noqa: E402
 from src.obs.store import store  # noqa: E402
 from src.telephony import session as session_module  # noqa: E402
-from src.telephony.session import CallSession, _two_letter  # noqa: E402
+from src.telephony.session import LIVE_SESSIONS, CallSession, _two_letter  # noqa: E402
 
 # The opening re-ask (nobody has spoken yet) has its own fixed wait.
 session_module.SILENCE_OPENING_RETRY_S = 0.8
@@ -57,7 +57,7 @@ class FakeTTS(tts.Synthesizer):
         self.seconds, self.delay, self.fail = seconds, delay, fail
         self.calls = 0
 
-    async def stream(self, text: str, language: str = "es"):
+    async def stream(self, text: str, language: str = "es", speed: float = 1.0):
         self.calls += 1
         await asyncio.sleep(self.delay)
         if self.fail:
@@ -94,6 +94,8 @@ def stop(session: CallSession) -> None:
     session._disarm_silence()
     for task in session._tasks:
         task.cancel()
+    LIVE_SESSIONS.pop(session.call_id, None)
+    store.close_call(session.call_id, "finished")
 
 
 def agent_lines(session: CallSession) -> list[str]:
@@ -139,8 +141,9 @@ async def silence_checks() -> None:
     speak(session, FakeTTS(seconds=0.3, delay=0.05))
     await session.say("How can I help?")
     await asyncio.sleep(1.5)
-    check("nobody has spoken yet: the opening re-ask, in English",
-          any("anyone there" in t for t in agent_lines(session)), agent_lines(session)[-1:])
+    check("nobody has spoken yet: the opening re-ask, in the session language",
+          any("Sigue" in t or "anyone there" in t.lower() or "Hay alguien" in t
+              for t in agent_lines(session)), agent_lines(session)[-1:])
     stop(session)
 
     session, _ = new_session()
@@ -188,9 +191,10 @@ async def cache_checks() -> None:
     section("B1 · fixed lines play from the cache")
     fake = FakeTTS(seconds=0.5, delay=0.05)
     text = settings.greeting
-    tts.remember_audio(text, "en", b"\xff" * 4000)
+    spoken = tts.speech_language(text, "en")
+    tts.remember_audio(text, spoken, b"\xff" * 4000)
     session, sent = new_session()
-    session.language = "en"
+    session.language = spoken
     speak(session, fake)
     await session.say(text, first=True)
     await asyncio.sleep(0.4)
@@ -256,7 +260,8 @@ async def tool_checks() -> None:
               "email": "nuria underscore delgado86 at outlook dot es", "insurer": "axa"}
     result = await tools.dispatch("register_new_patient", fields)
     check("the first call sends nothing", result.get("needs_confirmation") and not session.submissions)
-    check("names are spelled", result["read_back"]["given_name"] == "N-U-R-I-A")
+    check("names are said as names, not spelled letter by letter",
+          result["read_back"]["given_name"] == "Nuria")
     check("an inferred letter is flagged", result.get("letter_inferred") is True)
     corrected = {**fields, "given_name": "Núria", "confirmed": True}
     result = await tools.dispatch("register_new_patient", corrected)
