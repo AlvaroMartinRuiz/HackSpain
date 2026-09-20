@@ -192,6 +192,8 @@ class Settings:
     smtp_password: str = field(default_factory=lambda: _env("SMTP_PASSWORD", "GMAIL_APP_PASSWORD"))
     # Synthesise the greeting and fixed lines at start-up (~300 characters).
     tts_warm_cache: bool = field(default_factory=lambda: _bool("TTS_WARM_CACHE", True))
+    # Slower TTS only when the patient note says they are hard of hearing.
+    accessibility_voice: bool = field(default_factory=lambda: _bool("ACCESSIBILITY_VOICE", True))
 
     # Design assets
     # Quiver draws SVG, not data, so it is called by scripts/generate_assets.py

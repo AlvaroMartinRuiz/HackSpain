@@ -8,13 +8,17 @@ must never fail the call.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import smtplib
-from datetime import datetime
+from datetime import datetime, timedelta
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
+from uuid import uuid4
 
 import httpx
 
@@ -89,6 +93,30 @@ def compose(
     }[language]
     text_lines = [greeting, "", headline, ""] + [f"{label}: {value}" for label, value in rows] + ["", closing]
     text = "\n".join(text_lines)
+    maps = maps_url(str(details.get("address") or details.get("site") or ""))
+    ics = ics_for(
+        kind=kind,
+        slot=str(details.get("slot_iso") or ""),
+        site=str(details.get("site") or ""),
+        doctor=str(details.get("doctor") or ""),
+        patient_name=patient_name,
+    )
+    calendar_label = {"en": "Add to calendar", "es": "Añadir al calendario", "ca": "Afegir al calendari"}[language]
+    directions_label = {"en": "Directions", "es": "Cómo llegar", "ca": "Com arribar-hi"}[language]
+    button_bits = []
+    if maps and kind in {"book", "reschedule"}:
+        button_bits.append(
+            f'<a href="{_esc(maps)}" style="display:inline-block;margin:16px 8px 0 0;padding:10px 14px;'
+            f'background:#1b2430;color:#fff;border-radius:8px;text-decoration:none;font-weight:700">'
+            f"{_esc(directions_label)}</a>"
+        )
+    if ics:
+        button_bits.append(
+            f'<span style="display:inline-block;margin:16px 8px 0 0;padding:10px 14px;'
+            f'background:#f4f1ea;color:#1b2430;border-radius:8px;font-weight:700">'
+            f"{_esc(calendar_label)} · ICS</span>"
+        )
+    buttons = f'<div>{"".join(button_bits)}</div>' if button_bits else ""
     cells = "".join(
         f"<tr><td style=\"padding:8px 0;color:#5c6570;width:38%\">{_esc(label)}</td>"
         f"<td style=\"padding:8px 0;color:#1b2430;font-weight:600\">{_esc(value)}</td></tr>"
@@ -102,10 +130,11 @@ def compose(
     <h1 style="font-size:26px;margin:12px 0 8px">{_esc(headline)}</h1>
     <p style="margin:0 0 20px;color:#5c6570">{_esc(greeting)}</p>
     <table style="width:100%;border-collapse:collapse">{cells}</table>
+    {buttons}
     <p style="margin:24px 0 0;color:#5c6570;white-space:pre-line">{_esc(closing)}</p>
   </div>
 </body></html>"""
-    return {"subject": subject, "text": text, "html": html}
+    return {"subject": subject, "text": text, "html": html, "ics": ics, "maps_url": maps}
 
 
 def _rows(kind: str, language: str, details: dict[str, Any]) -> list[tuple[str, str]]:
@@ -164,7 +193,74 @@ def save_copy(call_id: str, kind: str, message: dict[str, str]) -> Path:
     OUTBOX.mkdir(parents=True, exist_ok=True)
     path = OUTBOX / f"{call_id}-{kind}.html"
     path.write_text(message["html"], encoding="utf-8")
+    if message.get("ics"):
+        (OUTBOX / f"{call_id}-{kind}.ics").write_text(message["ics"], encoding="utf-8")
     return path
+
+
+def maps_url(place: str) -> str:
+    text = (place or "").strip()
+    if not text:
+        return ""
+    return "https://www.google.com/maps/search/?api=1&query=" + quote(text)
+
+
+def ics_for(
+    *,
+    kind: str,
+    slot: str,
+    site: str = "",
+    doctor: str = "",
+    patient_name: str = "",
+    call_id: str = "",
+) -> str:
+    """VEVENT for book/reschedule. Empty for anything else. No invented reference."""
+    if kind not in {"book", "reschedule"} or not slot:
+        return ""
+    try:
+        start = datetime.fromisoformat(slot.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    end = start + timedelta(minutes=30)
+    uid = f"{call_id or uuid4()}@socketwizard"
+    summary = "Clínica Arenal"
+    description = f"Appointment with {doctor or 'your clinician'}."
+    if patient_name:
+        description += f" Patient: {patient_name}."
+    description += " No booking reference was issued."
+    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+
+    def _fmt(moment: datetime) -> str:
+        local = moment.astimezone(now_madrid().tzinfo) if moment.tzinfo else moment
+        return local.strftime("%Y%m%dT%H%M%S")
+
+    def _esc_ics(value: str) -> str:
+        return (
+            str(value or "")
+            .replace("\\", "\\\\")
+            .replace(";", "\\;")
+            .replace(",", "\\,")
+            .replace("\n", "\\n")
+        )
+
+    return "\r\n".join([
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Socket Wizard//Clínica Arenal//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        "BEGIN:VEVENT",
+        f"UID:{uid}",
+        f"DTSTAMP:{stamp}",
+        f"DTSTART:{_fmt(start)}",
+        f"DTEND:{_fmt(end)}",
+        f"SUMMARY:{_esc_ics(summary)}",
+        f"DESCRIPTION:{_esc_ics(description)}",
+        f"LOCATION:{_esc_ics(site)}",
+        "END:VEVENT",
+        "END:VCALENDAR",
+        "",
+    ])
 
 
 async def deliver(to: Optional[str | list[str]], message: dict[str, str]) -> dict[str, Any]:
@@ -221,13 +317,7 @@ async def _send_resend(addr: str, message: dict[str, str]) -> Optional[str]:
                     "Authorization": f"Bearer {settings.resend_api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "from": settings.followup_from,
-                    "to": [addr],
-                    "subject": message["subject"],
-                    "html": message["html"],
-                    "text": message["text"],
-                },
+                json=_resend_payload(addr, message),
             )
         if response.status_code >= 300:
             return f"HTTP {response.status_code} {response.text[:180]}"
@@ -236,18 +326,42 @@ async def _send_resend(addr: str, message: dict[str, str]) -> Optional[str]:
         return f"{type(exc).__name__}: {exc}"
 
 
+def _resend_payload(addr: str, message: dict[str, str]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "from": settings.followup_from,
+        "to": [addr],
+        "subject": message["subject"],
+        "html": message["html"],
+        "text": message["text"],
+    }
+    ics = message.get("ics") or ""
+    if ics:
+        payload["attachments"] = [{
+            "filename": "cita.ics",
+            "content": base64.b64encode(ics.encode("utf-8")).decode("ascii"),
+        }]
+    return payload
+
+
 def _send_smtp(addr: str, message: dict[str, str]) -> Optional[str]:
-    envelope = MIMEMultipart("alternative")
-    envelope["Subject"] = message["subject"]
-    envelope["From"] = f"Clínica Arenal <{settings.smtp_user}>"
-    envelope["To"] = addr
-    envelope.attach(MIMEText(message["text"], "plain", "utf-8"))
-    envelope.attach(MIMEText(message["html"], "html", "utf-8"))
+    mixed = MIMEMultipart("mixed")
+    mixed["Subject"] = message["subject"]
+    mixed["From"] = f"Clínica Arenal <{settings.smtp_user}>"
+    mixed["To"] = addr
+    alternative = MIMEMultipart("alternative")
+    alternative.attach(MIMEText(message["text"], "plain", "utf-8"))
+    alternative.attach(MIMEText(message["html"], "html", "utf-8"))
+    mixed.attach(alternative)
+    ics = message.get("ics") or ""
+    if ics:
+        part = MIMEApplication(ics.encode("utf-8"), _subtype="ics")
+        part.add_header("Content-Disposition", "attachment", filename="cita.ics")
+        mixed.attach(part)
     try:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=8) as smtp:
             smtp.starttls()
             smtp.login(settings.smtp_user, settings.smtp_password)
-            smtp.sendmail(settings.smtp_user, [addr], envelope.as_string())
+            smtp.sendmail(settings.smtp_user, [addr], mixed.as_string())
         return None
     except Exception as exc:
         return f"{type(exc).__name__}: {exc}"

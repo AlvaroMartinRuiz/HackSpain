@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/ops.css?v=talk1" />
+<link rel="stylesheet" href="/static/ops.css?v=product1" />
 </head>
 <body data-page="live">
 
@@ -16,7 +16,7 @@
     <span class="mark" id="brand-mark" data-icon="mark-elturno"></span>
     <div>
       <h1>Socket Wizard</h1>
-      <span class="sub" id="clinic-name">Clínica Arenal</span>
+      <span class="sub" id="clinic-name">AI front desk for Clínica Arenal</span>
     </div>
   </a>
 
@@ -25,6 +25,7 @@
     <a href="#/calls" data-nav="calls">Calls</a>
     <a href="#/talk" data-nav="talk">Talk</a>
     <a href="#/rehearse" data-nav="rehearse">Rehearse</a>
+    <a href="#/reliability" data-nav="reliability">Reliability</a>
   </nav>
 
   <div class="header-end">
@@ -44,8 +45,20 @@
         <h2>On the line</h2>
         <p class="lede" id="live-lede">The endpoint is listening.</p>
       </div>
+      <div class="page-actions">
+        <button type="button" class="btn ghost" id="btn-concurrency">Demo concurrency</button>
+      </div>
     </div>
     <div class="pills" id="pills"></div>
+
+    <div class="demo-banner hidden" id="demo-banner">
+      <div>
+        <p class="eyebrow">Jury walkthrough</p>
+        <h3>One call, the whole product</h3>
+        <p>Synthetic directory. Dry-run. Same journey, why, safety and email as a live booking.</p>
+      </div>
+      <button type="button" class="btn" id="btn-demo-story">Open example call</button>
+    </div>
 
     <section class="kpis" id="kpis"></section>
 
@@ -126,9 +139,12 @@
       </div>
       <!-- Outside the head on purpose: the head is rebuilt on every event, and
            rebuilding an <audio> element stops whatever was playing. -->
+      <div id="product-context"></div>
+      <div id="product-journey"></div>
       <div id="tape"></div>
     </aside>
     <section class="call-transcript">
+      <div id="product-resolution"></div>
       <div class="transcript-head">
         <span class="h-icon" data-icon="icon-transcript"></span> Transcript
       </div>
@@ -137,13 +153,17 @@
     </section>
     <aside class="inspector">
       <div class="tabs">
-        <button type="button" class="tab active" data-tab="decisions">Decisions</button>
+        <button type="button" class="tab active" data-tab="why">Why</button>
+        <button type="button" class="tab" data-tab="safety">Safety</button>
+        <button type="button" class="tab" data-tab="decisions">Decisions</button>
         <button type="button" class="tab" data-tab="tools">
           <span class="h-icon" data-icon="icon-tool"></span> Tools
         </button>
         <button type="button" class="tab" data-tab="record">Record</button>
       </div>
-      <div class="tab-body" id="tab-decisions"></div>
+      <div class="tab-body" id="tab-why"></div>
+      <div class="tab-body hidden" id="tab-safety"></div>
+      <div class="tab-body hidden" id="tab-decisions"></div>
       <div class="tab-body hidden" id="tab-tools"></div>
       <div class="tab-body hidden" id="tab-record"></div>
     </aside>
@@ -163,6 +183,8 @@
         </p>
       </div>
     </div>
+
+    <div class="break-grid" id="break-grid"></div>
 
     <form class="sheet" id="talk-form">
       <span class="h-icon form-mark" data-icon="icon-rehearse"></span>
@@ -229,7 +251,24 @@ Next Thursday first thing, if possible.</textarea>
   </div>
 </section>
 
+<section class="view hidden" id="view-reliability" hidden>
+  <div class="page">
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Engineering</p>
+        <h2>Reliability</h2>
+        <p class="lede">What we can show about this endpoint. An accepted record is HTTP 200, not a scored pass.</p>
+      </div>
+    </div>
+    <section class="kpis" id="reli-kpis"></section>
+    <section class="panel">
+      <h2>How we know it works</h2>
+      <div class="reli-copy" id="reli-copy"></div>
+    </section>
+  </div>
+</section>
+
 <script src="/static/talk.js?v=talk2"></script>
-<script src="/static/ops.js?v=followup1"></script>
+<script src="/static/ops.js?v=product1"></script>
 </body>
 </html>

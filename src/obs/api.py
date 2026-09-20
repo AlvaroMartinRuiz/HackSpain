@@ -17,6 +17,7 @@ from src.agent.llm import LLMClient
 from src.config import settings
 from src.domain.catalog import Catalog
 from src.obs.store import store
+from src.obs.product import overlay_from_events
 from src.obs import tape
 from src.platform_api.client import PlatformClient
 from src.voice.tts import active_provider_name
@@ -194,6 +195,7 @@ def _detail_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
         "actions": actions,
         "patient_full": patient_full,
         "turns": sum(1 for t in transcript if t.get("role") == "agent"),
+        "product": overlay_from_events(events),
     }
 
 
@@ -234,6 +236,90 @@ async def platform_submissions(limit: int = 25) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     finally:
         await client.aclose()
+
+
+@router.get("/reliability")
+async def reliability() -> dict[str, Any]:
+    from src.obs.product import compact_reliability
+    stats = store.aggregate()
+    return compact_reliability(stats, extras=stats)
+
+
+@router.get("/demo/story")
+async def demo_story() -> dict[str, Any]:
+    from src.obs.demo_story import story
+    return story()
+
+
+class BurstRequest(BaseModel):
+    calls: int = Field(default=6, ge=1, le=12)
+    seconds: float = Field(default=8.0, ge=2.0, le=12.0)
+
+
+_burst_lock = asyncio.Lock()
+
+
+@router.post("/demo/concurrency")
+async def demo_concurrency(request: BurstRequest) -> dict[str, Any]:
+    """Silent dry-run sockets on this process. Never posts a scored record."""
+    if _burst_lock.locked():
+        raise HTTPException(status_code=409, detail="a concurrency demo is already running")
+
+    async def run() -> None:
+        async with _burst_lock:
+            from src.obs.burst import burst
+            url = f"ws://127.0.0.1:{settings.port}/ws"
+            await burst(url, request.calls, request.seconds)
+
+    asyncio.create_task(run(), name="demo-concurrency")
+    return {"started": True, "calls": request.calls, "seconds": request.seconds, "dry_run": True}
+
+
+@router.get("/calls/{call_id}/followup")
+async def call_followup(call_id: str) -> dict[str, Any]:
+    """HTML already composed by src.notify.email and saved under data/emails/."""
+    call = store.load(call_id)
+    if call is None:
+        raise HTTPException(status_code=404, detail="no such call")
+    emails = list(getattr(call, "followup_emails", None) or [])
+    if not emails:
+        raise HTTPException(status_code=404, detail="no follow-up on this call")
+    last = emails[-1]
+    html = ""
+    path = last.get("path")
+    if path:
+        try:
+            html = Path(path).read_text(encoding="utf-8")
+        except OSError:
+            html = ""
+    ics_path = _ics_path(call_id)
+    return {
+        "subject": last.get("subject"),
+        "to": last.get("to"),
+        "html": html,
+        "text": last.get("text"),
+        "sent": last.get("sent"),
+        "reason": last.get("reason"),
+        "path": path,
+        "action": last.get("action"),
+        "maps_url": last.get("maps_url") or "",
+        "ics": bool(last.get("ics") or ics_path),
+        "ics_url": f"/api/console/calls/{call_id}/ics" if ics_path else None,
+    }
+
+
+def _ics_path(call_id: str) -> Optional[Path]:
+    from src.notify.email import OUTBOX
+    matches = sorted(OUTBOX.glob(f"{call_id}-*.ics"), reverse=True)
+    return matches[0] if matches else None
+
+
+@router.get("/calls/{call_id}/ics")
+async def call_ics(call_id: str) -> FileResponse:
+    path = _ics_path(call_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="no calendar file for this call")
+    return FileResponse(path, media_type="text/calendar", filename=path.name)
 
 
 class RehearsalRequest(BaseModel):

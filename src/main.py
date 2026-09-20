@@ -122,6 +122,17 @@ async def control() -> FileResponse:
     return FileResponse(STATIC_DIR / "ops.html")
 
 
+@app.get("/ops", include_in_schema=False)
+async def ops() -> FileResponse:
+    return FileResponse(STATIC_DIR / "ops.html")
+
+
+@app.get("/demo", include_in_schema=False)
+async def public_demo() -> FileResponse:
+    """Same console, jury-facing. Safe actions only; scored submits stay on /ops."""
+    return FileResponse(STATIC_DIR / "ops.html")
+
+
 @app.get("/console", include_in_schema=False)
 async def console() -> FileResponse:
     """The original one-call-at-a-time console, kept for the deep read of a

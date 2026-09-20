@@ -20,6 +20,11 @@ data/ops-smoke.db-*
 data/recordings/
 data/emails/
 
+# Local IDE / review dumps. Never ship these.
+.cursor/
+.review-alvaro/
+openapi.json
+
 # Server output when it is started detached.
 server.out
 server.err

@@ -125,7 +125,7 @@ def speech_language(text: str, fallback: str) -> str:
 
 class Synthesizer:
     async def stream(
-        self, text: str, language: str = "es"
+        self, text: str, language: str = "es", speed: float = 1.0
     ) -> AsyncIterator[bytes]:  # pragma: no cover - interface
         raise NotImplementedError
         yield b""
@@ -148,7 +148,7 @@ class DeepgramSynthesizer(Synthesizer):
             limits=httpx.Limits(max_connections=60, max_keepalive_connections=30),
         )
 
-    async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
+    async def stream(self, text: str, language: str = "es", speed: float = 1.0) -> AsyncIterator[bytes]:
         model = deepgram_model_for_language(language)
         params = {
             "model": model,
@@ -180,7 +180,7 @@ class ElevenLabsSynthesizer(Synthesizer):
             limits=httpx.Limits(max_connections=60, max_keepalive_connections=30),
         )
 
-    async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
+    async def stream(self, text: str, language: str = "es", speed: float = 1.0) -> AsyncIterator[bytes]:
         path = f"/v1/text-to-speech/{elevenlabs_voice_for_language(language)}/stream"
         code = language.lower()[:2]
         model = elevenlabs_model_for_language(code)
@@ -190,7 +190,11 @@ class ElevenLabsSynthesizer(Synthesizer):
         body = {
             "text": text,
             "model_id": model,
-            "voice_settings": {"stability": 0.4, "similarity_boost": 0.7, "speed": 1.0},
+            "voice_settings": {
+                "stability": 0.4,
+                "similarity_boost": 0.7,
+                "speed": max(0.7, min(1.2, speed or 1.0)),
+            },
         }
         if code in _SUPPORTED_ELEVENLABS_LANGUAGES:
             body["language_code"] = code
@@ -219,7 +223,7 @@ class CartesiaSynthesizer(Synthesizer):
             timeout=httpx.Timeout(30.0, connect=6.0),
         )
 
-    async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
+    async def stream(self, text: str, language: str = "es", speed: float = 1.0) -> AsyncIterator[bytes]:
         body = {
             "model_id": settings.cartesia_model,
             "transcript": text,
@@ -251,7 +255,7 @@ class OpenAISynthesizer(Synthesizer):
             timeout=httpx.Timeout(30.0, connect=6.0),
         )
 
-    async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
+    async def stream(self, text: str, language: str = "es", speed: float = 1.0) -> AsyncIterator[bytes]:
         body = {
             "model": settings.openai_tts_model,
             "voice": settings.openai_tts_voice,
@@ -281,7 +285,7 @@ class OpenAISynthesizer(Synthesizer):
 class SilentSynthesizer(Synthesizer):
     """No keys configured: keeps the pipeline testable without making sound."""
 
-    async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
+    async def stream(self, text: str, language: str = "es", speed: float = 1.0) -> AsyncIterator[bytes]:
         # Roughly the length the words would have taken, so timing stays honest.
         duration_ms = min(6000, max(400, len(text) * 55))
         yield silence(duration_ms)
@@ -294,7 +298,7 @@ class ResilientSynthesizer(Synthesizer):
     def __init__(self, primary: Synthesizer, fallbacks: Optional[list[Synthesizer]] = None) -> None:
         self._chain = [primary] + list(fallbacks or [])
 
-    async def stream(self, text: str, language: str = "es") -> AsyncIterator[bytes]:
+    async def stream(self, text: str, language: str = "es", speed: float = 1.0) -> AsyncIterator[bytes]:
         last_error: Optional[Exception] = None
         for index, synth in enumerate(self._chain):
             attempts = 2 if index == 0 else 1

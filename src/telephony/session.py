@@ -137,6 +137,7 @@ class CallSession:
         self._frozen = False
         self._winding_down = False
         self.language = settings.default_language
+        self.tts_speed = 1.0
         # Not in _tasks: it is cancelled and re-created on every turn.
         self._silence_task: Optional[asyncio.Task] = None
         self._silence_prompts = 0
@@ -501,7 +502,7 @@ class CallSession:
         # _synthesizing. _speaking_since stays "audio is on the line": the
         # player keys the start of an utterance off it.
         try:
-            async for chunk in self.synthesizer.stream(text, language):
+            async for chunk in self.synthesizer.stream(text, language, speed=self.tts_speed):
                 if generation != self._generation:
                     return
                 if first_byte_ms is None:
@@ -992,6 +993,14 @@ class CallSession:
             self.seen_patients.append(patient)
         await self.record("patient_identified", {"patient": patient, "visit_count": context.get("visit_count")})
         await self.agent.brief_on_patient(patient, context)
+        if settings.accessibility_voice:
+            from src.obs.product import hearing_support_from_note
+            if hearing_support_from_note(str((patient or {}).get("note") or "")):
+                self.tts_speed = 0.85
+                await self.record("decision", {
+                    "stage": "accessibility",
+                    "why": "Patient note recommends slower, clearer speech.",
+                })
 
     async def remember_matches(self, matches: list[dict[str, Any]]) -> None:
         for match in matches:
@@ -1031,7 +1040,10 @@ class CallSession:
         """Compose and log a confirmation. Sending never blocks the record."""
         try:
             event = self._compose_followup(action, payload)
-            await self.record("followup_email", {k: v for k, v in event.items() if k != "html"})
+            await self.record(
+                "followup_email",
+                {k: v for k, v in event.items() if k not in ("html", "ics_body")},
+            )
         except Exception as exc:
             log.warning("followup compose failed: %s", exc)
             return
@@ -1057,6 +1069,9 @@ class CallSession:
             "sent": False,
             "reason": "queued",
             "path": str(path),
+            "maps_url": message.get("maps_url") or "",
+            "ics": bool(message.get("ics")),
+            "ics_body": message.get("ics") or "",
         }
 
     def _followup_details(
@@ -1091,6 +1106,7 @@ class CallSession:
                         "when": followup_email.format_when(slot, self.language) or row.get("when"),
                         "doctor": row.get("provider_name"),
                         "site": row.get("location_name"),
+                        "slot_iso": slot,
                     }
                     return name, to, details
         provider = self.catalog.providers.get(provider_id or "")
@@ -1102,6 +1118,8 @@ class CallSession:
             "when": followup_email.format_when(slot, self.language),
             "doctor": provider.name if provider else provider_id,
             "site": site or location_id,
+            "address": location.address if location is not None else "",
+            "slot_iso": slot,
         }
 
     async def _deliver_followup(self, event: dict[str, Any]) -> None:
@@ -1109,8 +1127,9 @@ class CallSession:
             "subject": event["subject"],
             "text": event["text"],
             "html": event["html"],
+            "ics": event.get("ics_body") or "",
         })
-        update = {k: v for k, v in {**event, **result}.items() if k != "html"}
+        update = {k: v for k, v in {**event, **result}.items() if k not in ("html", "ics_body")}
         try:
             await self.record("followup_email", update)
         except Exception as exc:

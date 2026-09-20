@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: socket-wizard
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    dockerCommand: ""
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: RELOAD
+        value: "false"
+      - key: PYTHONUNBUFFERED
+        value: "1"

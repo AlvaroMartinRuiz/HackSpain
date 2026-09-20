@@ -1,113 +1,98 @@
-# HackSpain — Prosper Track
+# Socket Wizard
 
-## Challenge
+AI front desk for Clínica Arenal. A patient rings; the agent listens, uses the chart, books against real availability, and can show why.
 
-[Prosper AI track](https://hackspain.app/tracks/prosper-ai)
+The model conducts the conversation. Code decides the record.
 
-## Team docs
+## What it does
 
-- [PROSPER-TRACK.md](./PROSPER-TRACK.md) — guía de referencia del reto (API, scoring, problemas, setup)
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — cómo está construido y qué resuelve cada pieza
-- [RUNBOOK.md](./RUNBOOK.md) — arrancar, exponer con ngrok, depurar, y la demo para el jurado
+Someone calls the clinic. Socket Wizard picks up on a Twilio Media Streams WebSocket, identifies the caller against the clinic directory, opens the chart, searches real slots, and submits book / reschedule / cancel / register / no_action / escalate. After a successful submit it can send a confirmation email with a calendar file and directions. Nothing on that path is invented by the language model: IDs, slots, providers, insurance and reasons come from tools and the clinic API.
 
-## Our solution — Socket Wizard
+## Key capabilities
 
-A WebSocket server that speaks Twilio Media Streams, with a live console
-on the same port.
+- Natural call handling: barge-in, Pipecat Smart Turn, stale-reply protection
+- Chart-first personalization: visit history, usual site, insurer, accessibility notes
+- Clinic rules: insurance, referral, age, location, third-party callers
+- Safety: red flags escalate; it does not practise medicine
+- Languages: Spanish, English, Catalan, including mid-call code-switch
+- Follow-up: email + `.ics` + maps after book/reschedule (cancel and register too)
+- Floor: live calls, Patient Journey, Why this decision, Safety, replay, rehearsal
 
-```powershell
-# Windows
-.\.venv\Scripts\python -m pip install -r requirements.txt
-.\.venv\Scripts\python scripts\check_domain.py    # núcleo determinista
-.\.venv\Scripts\python scripts\check_engine.py    # contra la clínica real
-.\run.ps1
-```
+## Architecture
+
+One FastAPI process.
+
+- `/ws` — Twilio-compatible media stream, one `CallSession` per call
+- `/` and `/ops` — operations console
+- `/demo` — same console, jury-facing (example call, dry-run concurrency)
+- `/console` — classic single-call debugger
+- `/health` — liveness for deploy
+
+Voice: Deepgram or ElevenLabs Scribe (STT), ElevenLabs Flash (TTS), Cloudflare-compatible gpt-4o (LLM). Domain engine in `src/domain`. Tools in `src/agent`. Observability in `src/obs`. Mail in `src/notify/email.py`.
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+## How a call works
+
+1. Socket opens. Session isolated from every other call.
+2. Greeting. STT + Smart Turn wait until the caller has actually finished.
+3. Tools look up the patient and the chart. The agent does not ask what the file already knows.
+4. Availability and rules come from the clinic. The model may only talk about what tools returned.
+5. Submit the record. Then, and only then, compose follow-up mail. Mail cannot fail the submit.
+
+## Safety by design
+
+- No medical advice. Red flags stop booking and escalate.
+- Third-party callers do not get another patient's protected fields read back.
+- National id and phone stay off the line unless the caller said them.
+- Named-doctor requests warn and wait; the agent does not invent a substitute.
+
+## Languages
+
+ES / EN / CA. Detection can change mid-call without restarting the socket. Native ElevenLabs voices for Spanish and English; Catalan uses the conversational model once detected.
+
+## Observability
+
+The floor shows live activity (listening / thinking / speaking), a Patient Journey derived from the same events as the transcript, deterministic explainability, safety shields, post-call summary, reliability metrics, and replay. An **accepted record** is HTTP 200, not a scored leaderboard pass.
+
+## Evaluation
 
 ```bash
-# macOS / Linux
-./.venv/bin/python -m pip install -r requirements.txt
-./.venv/bin/python scripts/check_domain.py
-./.venv/bin/python scripts/check_engine.py
-bash run.sh
+python scripts/check_domain.py      # dates, DNI, types, triage — no network
+python scripts/check_engine.py      # domain engine against the clinic
+python scripts/check_product.py     # journey, why, safety, ICS
+python scripts/rehearse.py          # text calls with no audio quota
+python scripts/mock_call.py         # N simultaneous sockets against our /ws
 ```
 
-- Consola: <http://localhost:7860/>
-- Endpoint de llamadas: `ws://localhost:7860/ws` (`wss://` a través de ngrok)
+## Run locally
 
-Falta el `.env`, que no está en el repo: pídeselo al equipo. El montaje completo
-en una máquina nueva está en [RUNBOOK.md](./RUNBOOK.md).
+```bash
+python -m pip install -r requirements.txt
+cp .env.example .env   # fill keys locally; never commit .env
+python scripts/check_domain.py
+python -m uvicorn src.main:app --host 127.0.0.1 --port 7860
+```
 
-El principio de diseño: **el modelo conduce la conversación, el código decide el
-registro.** Ningún id, minuto, tipo de cita, póliza ni motivo de rechazo sale de
-lo que el modelo crea; todos salen de lo que devolvió la clínica. Está explicado
-en [ARCHITECTURE.md](./ARCHITECTURE.md).
+- Console: http://localhost:7860/
+- Demo: http://localhost:7860/demo
+- Calls: `ws://localhost:7860/ws`
 
-### Herramientas
+Full operator notes: [RUNBOOK.md](./RUNBOOK.md).
 
-| Script | Para qué |
-| --- | --- |
-| `scripts/check_domain.py` | Fechas, DNI, tipos de cita, cierres, triaje. Sin red, sin modelo |
-| `scripts/check_engine.py` | El motor contra la clínica real: huecos, reglas, rechazos |
-| `scripts/rehearse.py` | Escenarios con la forma de los problemas puntuados, en texto y sin cuota |
-| `scripts/mock_call.py` | Marca nuestro propio socket, N a la vez. El chequeo del problema 2 |
-| `scripts/fetch_catalog.py` | Cachea el catálogo de la clínica en `data/` |
-| `scripts/smoke_test.py` | Que la clave y el host responden |
+## Deploy
 
-## What we're building
+Long-lived process, not serverless. [DEPLOY.md](./DEPLOY.md). Dockerfile included. Register `PUBLIC_WS_URL` (`wss://…/ws`) with the desk. Protect the console with `CONSOLE_TOKEN`.
 
-A voice AI agent that answers inbound scheduling calls for a clinic, the way a receptionist would.
+## Live demo
 
-Someone rings. Our agent picks up, works out who is calling and what they need, looks them up in the clinic's records, finds real availability, and books, moves or cancels the appointment. Some calls should not end in a booking at all — the clinic cannot do it, the caller needs a doctor now, the rules say no — and recognising those is as much a part of the job as booking well.
+[JURY_DEMO.md](./JURY_DEMO.md) — 5 minutes, live first.  
+[DEMO_VIDEO.md](./DEMO_VIDEO.md) — ~2 minute story cut.
 
-The voice model is one component of the system we design, not the system. Doing well means building around it: real lookups, real availability, checks before anything is written, state that survives a caller changing their mind, and enough visibility to explain why the agent said what it said.
+Dry-run Talk and **Demo concurrency** never post scored records.
 
-## How the weekend runs
+## HackSpain / Prosper
 
-Friday 18 → Sunday 20 September.
+Built for the Prosper AI track at HackSpain (“El Turno” is the challenge name, not the product). Scoring still wants the record exactly right. The jury also scores how the call sounds, whether the clinic seems to know the caller, the platform you can drive live, safety, language, and how you know the agent works.
 
-1. **Register and stand up an endpoint.** Register the team, get a key, stand up an endpoint that can be called. The starter kit gets a talking agent running in minutes; everything after that is ours to build.
-2. **Build and rehearse.** Dial ourselves as often as we like against published practice cases, answers included.
-3. **Run for score** when ready. Pick one open problem; they dial one private case. Each problem pays the first four passed cases. Twelve minutes between scored runs.
-4. **Checkpoints.** Twice over the weekend the board freezes and prizes go to whoever is leading. Being early pays.
-5. **Sunday: the final boss.** The jury calls the agent themselves, and we show them what we built.
-
-## What the callers throw at us
-
-Eighteen problems, each with its own persona calling in. Each one isolates a single thing that makes a real front desk hard, on top of the same ordinary booking:
-
-- The straightforward booking, and ten of them at once.
-- A caller the records do not know yet, and a caller who matches four people.
-- Someone asking for a specific doctor, a specific site, or "the soonest".
-- Vague times — "next Thursday", "first thing Monday" — that have to resolve.
-- Requests the clinic's rules forbid, which must be refused for the right reason.
-- A full diary with nothing free.
-- Changes and cancellations.
-- A parent calling for a child, a daughter for her father.
-- Someone who should be sent to a doctor, not a calendar.
-- Callers not speaking English, including other languages of Spain.
-- A terrible line, a caller who interrupts and corrects and changes their mind, and someone trying to talk the agent into something it should not do.
-
-## How we're scored
-
-Two things, added together.
-
-### The leaderboard
-
-Automatic, and brutally literal. After each call the agent tells the graders what it did. Either that matches what the case accepts, or the case fails. There is no partial credit, no points for a nice conversation, and no credit for nearly. A call that correctly refuses still has to say so; silence is always wrong. Each problem pays the first four **passed** cases; failed scored calls only cost the 12-minute cooldown. Run All results from before Saturday still count.
-
-### The jury's final boss
-
-Everything the leaderboard ignores. The jury calls us themselves and judges the call as a person on the phone would: how it sounds, how it handles being interrupted, whether it feels like the clinic knows who is calling. Then they judge what we built around it — how a call is orchestrated, what's visible while it's happening, what can be learned from it afterwards, and whether we can show any of it working. Safety, language, and how we know our own agent works all count.
-
-## Sponsor credits available
-
-We have free access to the following platforms if we need them (using them is optional, and we're free to use other tools too):
-
-- **Vercel** — AI Gateway credits · $50
-- **QuiverAI** — API credits · $50. AI-native design tool and research company.
-- **Fal AI** — API credits · $50. Generative media platform / fast inference engine for image, video, audio, and 3D models.
-- **Cloudflare** — AI Gateway · $100. Build, deploy, and govern AI agents on the same network — secure MCP portals, identity-aware access, built-in inference.
-- **Exa** — API credits · $50. Search API for AI agents needing real-time web data, deep research, and structured content.
-- **Cognition** — Devin Max plan · $200 in codes. Devin, the autonomous software engineer that plans, writes, tests, and ships code.
-- **Cursor**
-- **Helmcode** — 600M tokens (DeepSeek V4 / GLM 5.3). Managed AI inference infrastructure.
+Challenge notes live under [docs/prosper/](./docs/prosper/).
