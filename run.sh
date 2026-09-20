@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 
 python=./.venv/bin/python
 if [ ! -x "$python" ]; then
-  echo "No hay .venv aquí. RUNBOOK.md -> 'Desde cero en una máquina nueva'." >&2
+  echo "No hay .venv aquí. Mira el Readme." >&2
   exit 1
 fi
 

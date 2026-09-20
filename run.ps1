@@ -6,7 +6,7 @@ Set-Location $PSScriptRoot
 
 $python = ".\.venv\Scripts\python.exe"
 if (-not (Test-Path $python)) {
-    Write-Error "No hay .venv aqui. RUNBOOK.md -> 'Desde cero en una maquina nueva'."
+    Write-Error "No hay .venv aqui. Mira el Readme."
     exit 1
 }
 

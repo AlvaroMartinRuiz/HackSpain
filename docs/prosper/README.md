@@ -40,7 +40,3 @@ it freely.
 - ReDoc: `https://hackspain.getprosperapp.com/api/redoc`
 - Raw spec: `https://hackspain.getprosperapp.com/api/openapi.json`
 - Dashboard + docs: `https://hackspain.getprosperapp.com/leaderboard/docs`
-
-## See also
-
-`../../PROSPER-TRACK.md` — the team's own condensed guide to the same material.

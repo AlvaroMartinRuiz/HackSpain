@@ -21,6 +21,3 @@ ngrok.err
 openapi.json
 *.md
 !Readme.md
-!ARCHITECTURE.md
-!RUNBOOK.md
-!DEPLOY.md

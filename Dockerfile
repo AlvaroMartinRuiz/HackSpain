@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src ./src
 COPY scripts ./scripts
 COPY data/catalog.json ./data/catalog.json
-COPY Readme.md ARCHITECTURE.md RUNBOOK.md ./
+COPY Readme.md ./
 
 ENV HOST=0.0.0.0
 ENV RELOAD=false
