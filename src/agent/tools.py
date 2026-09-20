@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from src.domain.catalog import age_months
 from src.domain.engine import Slot
 from src.domain.identity import normalize_provider_name, normalize_text, parse_national_id
+from src.domain.local_directory import remember as remember_patient
 from src.domain.outcomes import ALL_REASONS, is_valid_reason
 from src.domain.timeref import format_slot, now_madrid
 from src.domain.triage import triage
@@ -348,8 +349,9 @@ SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "escalate_call",
             "description": (
-                "Hand the call to a human. Use `medical_emergency` for a red flag, after telling "
-                "the caller to seek urgent care."
+                "Record an escalation request only. This does NOT transfer the call, connect "
+                "a human or summon help. Never promise a transfer. Use `medical_emergency` "
+                "for a red flag, after telling the caller to seek urgent care now."
             ),
             "parameters": {
                 "type": "object",
@@ -406,7 +408,7 @@ class ToolBox:
         result = await self.engine.identify(
             name=args.get("name"),
             national_id=args.get("national_id"),
-            phone=args.get("phone"),
+            phone=args.get("phone") or self.session.from_number,
             date_of_birth=args.get("date_of_birth"),
             prior_matches=self.session.seen_patients,
         )
@@ -937,7 +939,10 @@ class ToolBox:
             }
 
         payload = {"call_id": self.session.call_id, **fields}
+        if self.session.from_number and not payload.get("phone"):
+            payload["phone"] = self.session.from_number
         result = await self.session.submit("register", payload)
+        remember_patient({**payload, "has_visited_before": True})
         await self.session.record("decision", {"stage": "registered", "payload": payload})
         return {
             "registered": result.accepted or result.duplicate,

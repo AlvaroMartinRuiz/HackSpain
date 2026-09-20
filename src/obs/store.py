@@ -29,9 +29,13 @@ MAX_FINISHED_CALLS = 60
 ACTIVITY_BY_EVENT = {
     "caller_speaking": "listening",
     "stt_partial": "listening",
+    "turn_gate": "listening",
     "stt_final": "thinking",
+    "turn_committed": "thinking",
+    "agent_thinking": "thinking",
     "interruption": "listening",
     "llm": "thinking",
+    "tool_started": "thinking",
     "tool_call": "thinking",
     "clinic_call": "thinking",
     "agent_said": "speaking",
@@ -327,7 +331,7 @@ class CallStore:
         if activity is not None and activity != call.activity:
             call.activity = activity
             call.activity_since = time.monotonic()
-        if kind == "tool_call":
+        if kind in ("tool_started", "tool_call"):
             call.current_tool = payload.get("name")
         elif kind in ("agent_said", "agent_turn_end"):
             call.current_tool = None
@@ -472,10 +476,6 @@ class CallStore:
             interruptions += call.metrics["interruptions"]
 
         submitted = [call for call in recent if call.submissions]
-        accepted = [
-            call for call in recent
-            if any(s.get("accepted") for s in call.submissions)
-        ]
         by_activity = {name: 0 for name in ACTIVITIES}
         for call in live:
             by_activity[call.activity] = by_activity.get(call.activity, 0) + 1
@@ -503,7 +503,10 @@ class CallStore:
             "peak_concurrency": self._peak_concurrency,
             "recent": len(recent),
             "with_submission": len(submitted),
-            "with_accepted_submission": len(accepted),
+            "with_accepted_submission": sum(
+                1 for call in live + recent for s in call.submissions
+                if s.get("accepted") and not s.get("dry_run")
+            ),
             "silent_calls": len([c for c in recent if not c.submissions]),
             "median_response_ms": _median(all_latencies),
             "p90_response_ms": _percentile(all_latencies, 90),

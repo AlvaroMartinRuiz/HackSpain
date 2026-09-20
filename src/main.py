@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -76,12 +77,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     warming = asyncio.create_task(_warm_voice_cache(), name="tts-cache")
     turning = asyncio.create_task(_warm_smart_turn(), name="smart-turn")
+    reaping = asyncio.create_task(_reap_quiet_calls(), name="reap-calls")
     try:
         yield
     finally:
         warming.cancel()
         turning.cancel()
+        reaping.cancel()
         await llm.aclose()
+
+
+async def _reap_quiet_calls() -> None:
+    """Close harness leftovers and sockets that died without a hangup."""
+    from src.telephony.session import LIVE_SESSIONS
+
+    while True:
+        try:
+            await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            raise
+        now = time.monotonic()
+        limit = max(30.0, settings.silence_hangup_s)
+        for call in list(store.live_calls()):
+            idle = now - call.activity_since
+            session = LIVE_SESSIONS.get(call.call_id)
+            harness = str(call.call_id).startswith("check-") and session is None
+            stale = session is None and idle >= limit
+            if not harness and not stale:
+                continue
+            store.close_call(call.call_id, "finished")
+            await store.announce({"type": "call_ended", "call_id": call.call_id})
+            logger.info("reaped silent call %s", call.call_id[:24])
 
 
 async def _warm_smart_turn() -> None:
@@ -129,8 +155,8 @@ async def ops() -> FileResponse:
 
 @app.get("/demo", include_in_schema=False)
 async def public_demo() -> FileResponse:
-    """Same console, jury-facing. Safe actions only; scored submits stay on /ops."""
-    return FileResponse(STATIC_DIR / "ops.html")
+    """Cinematic live-call stage for the jury recording. Same events as /ops."""
+    return FileResponse(STATIC_DIR / "stage.html")
 
 
 @app.get("/console", include_in_schema=False)

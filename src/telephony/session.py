@@ -20,6 +20,7 @@ from src.agent.llm import LLMClient
 from src.config import settings
 from src.domain.catalog import Catalog
 from src.domain.engine import SchedulingEngine
+from src.domain.local_directory import remember as remember_patient
 from src.obs.store import CallStore
 from src.obs import tape
 from src.platform_api.client import PlatformClient, SubmitResult
@@ -35,6 +36,7 @@ Closer = Callable[[], Awaitable[None]]
 log = logging.getLogger("socketwizard")
 _FOLLOWUP_ACTIONS = {"book", "reschedule", "cancel", "register"}
 _FOLLOWUP_TASKS: set[asyncio.Task] = set()
+LIVE_SESSIONS: dict[str, "CallSession"] = {}
 
 # Deepgram's Nova-3 barge-in guidance: two words on an interim result. We stop
 # ourselves when they talk; we never start a turn until Pipecat Smart Turn
@@ -146,6 +148,7 @@ class CallSession:
         self._language_established = False
         self._heard_caller = False
         self._started_at = time.monotonic()
+        LIVE_SESSIONS[self.call_id] = self
         self._last_partial_at = 0.0
         self._last_speech_started_at = 0.0
         self._caller_speaking = False
@@ -166,6 +169,7 @@ class CallSession:
                 asyncio.create_task(self._speaker_loop(), name=f"speaker:{self.call_id}"),
                 asyncio.create_task(self._player_loop(), name=f"player:{self.call_id}"),
                 asyncio.create_task(self._deadline_loop(), name=f"deadline:{self.call_id}"),
+                asyncio.create_task(self._silence_hangup_loop(), name=f"silence-hangup:{self.call_id}"),
             ]
         await self.record("decision", {"stage": "greeting", "why": "call connected"})
         # Do not await the greeting here: the socket still has to read inbound
@@ -322,6 +326,7 @@ class CallSession:
 
         self.store.close_call(self.call_id, status)
         await self.store.announce({"type": "call_ended", "call_id": self.call_id})
+        LIVE_SESSIONS.pop(self.call_id, None)
 
     async def _recover_last_turn(self) -> None:
         """Take back whatever the transcriber is still holding, before deciding.
@@ -778,6 +783,7 @@ class CallSession:
             await self.record("stt_echo", {"text": text})
             return
         self._heard_caller = True
+        self._last_caller_activity = time.monotonic()
         if settings.barge_in and (self.is_speaking or self._turn_lock.locked()) and self._worthy_barge_in(text, final=True):
             await self._interrupt(text)
         decision = decide_language(
@@ -988,9 +994,42 @@ class CallSession:
         if call is not None:
             call.metrics["response_ms"].append(elapsed_ms)
 
+    async def _silence_hangup_loop(self) -> None:
+        """Hang up after a long quiet stretch. Prompts still run on their own clock."""
+        limit = max(30.0, settings.silence_hangup_s)
+        while not self._closing and not self._closed:
+            mark = self._last_caller_activity or self._started_at
+            wait = limit - (time.monotonic() - mark)
+            if wait <= 0:
+                break
+            try:
+                await asyncio.sleep(min(wait, 5.0))
+            except asyncio.CancelledError:
+                return
+        if self._closing or self._closed:
+            return
+        silent_s = round(time.monotonic() - (self._last_caller_activity or self._started_at), 1)
+        await self.record("decision", {
+            "stage": "silence_hangup",
+            "why": "nobody spoke for three minutes",
+            "silent_s": silent_s,
+        })
+        await self._close_politely()
+        if self._close_wire is not None:
+            try:
+                await self._close_wire()
+            except Exception:
+                pass
+
+    def _quiet_for(self) -> float:
+        return time.monotonic() - (self._last_caller_activity or self._started_at)
+
     async def on_patient_identified(self, patient: dict[str, Any], context: dict[str, Any]) -> None:
         if patient not in self.seen_patients:
             self.seen_patients.append(patient)
+        if self.from_number and not patient.get("phone"):
+            patient = {**patient, "phone": self.from_number}
+        remember_patient(patient)
         await self.record("patient_identified", {"patient": patient, "visit_count": context.get("visit_count")})
         await self.agent.brief_on_patient(patient, context)
         if settings.accessibility_voice:
@@ -1040,12 +1079,16 @@ class CallSession:
         """Compose and log a confirmation. Sending never blocks the record."""
         try:
             event = self._compose_followup(action, payload)
+            if self.dry_run:
+                event["reason"] = "dry_run"
             await self.record(
                 "followup_email",
                 {k: v for k, v in event.items() if k not in ("html", "ics_body")},
             )
         except Exception as exc:
             log.warning("followup compose failed: %s", exc)
+            return
+        if self.dry_run:
             return
         task = asyncio.create_task(self._deliver_followup(event), name=f"followup:{self.call_id}")
         _FOLLOWUP_TASKS.add(task)

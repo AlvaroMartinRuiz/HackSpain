@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import sys
 import unittest
 from dataclasses import replace
@@ -38,6 +39,25 @@ class PipelineChecks(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*self.session._tasks, return_exceptions=True)
         await self.session.client.aclose()
         await self.llm.aclose()
+
+    async def test_product_trace_preserves_structured_chart(self):
+        result = {'patient': {'patient_id': 'P-test'}, 'visit_count': 20,
+                  'recent_past': [{'note': 'x' * 4500}], 'upcoming': []}
+        self.session.record = AsyncMock()
+        self.session.agent.tools.dispatch = AsyncMock(return_value=result)
+        await self.session.agent._run_tool('tool-1', 'open_chart', {})
+        payload = self.session.record.await_args.args[1]
+        self.assertEqual(payload['result'], result)
+        self.assertEqual(json.loads(self.session.agent.messages[-1]['content']), result)
+
+    async def test_dry_run_never_delivers_email(self):
+        self.session.record = AsyncMock()
+        self.session._deliver_followup = AsyncMock()
+        with patch.object(self.session, '_compose_followup', return_value={'sent': False, 'html': '', 'ics_body': ''}):
+            await self.session._queue_followup('book', {})
+        await asyncio.sleep(0)
+        self.session._deliver_followup.assert_not_awaited()
+        self.assertEqual(self.session.record.await_args.args[1]['reason'], 'dry_run')
 
     async def test_low_confidence_final_is_not_lost(self):
         final, notice = AsyncMock(), AsyncMock()

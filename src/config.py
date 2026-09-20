@@ -175,8 +175,8 @@ class Settings:
     )
     # Nearly every caller speaks English; a detected language replaces this.
     default_language: str = field(default_factory=lambda: _env("DEFAULT_LANGUAGE", default="en").lower())
-    silence_prompt_s: float = field(default_factory=lambda: _float("SILENCE_PROMPT_S", 16.0))
-    silence_prompt_max: int = field(default_factory=lambda: _int("SILENCE_PROMPT_MAX", 2))
+    # After the 'are you still there?' prompts, hang up if nobody answers.
+    silence_hangup_s: float = field(default_factory=lambda: _float("SILENCE_HANGUP_S", 180.0))
     # Post-call summary / appointment confirmation. Never on the scored path.
     followup_email: bool = field(default_factory=lambda: _bool("FOLLOWUP_EMAIL", True))
     followup_from: str = field(

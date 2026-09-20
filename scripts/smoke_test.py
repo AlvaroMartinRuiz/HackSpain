@@ -28,7 +28,7 @@ def check(label: str, ok: bool, detail: str = "") -> bool:
 
 def main() -> int:
     print(f"Base URL: {BASE_URL}")
-    print(f"API key:  {'set (' + API_KEY[:8] + '...)' if API_KEY else 'MISSING'}")
+    print(f"API key:  {'set' if API_KEY else 'MISSING'}")
     print()
 
     if not API_KEY:

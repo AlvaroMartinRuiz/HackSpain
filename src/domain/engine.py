@@ -22,6 +22,8 @@ from src.domain.identity import (
     peel_insurer_from_email,
     split_id_and_phone,
 )
+from src.domain.local_directory import chart as local_chart
+from src.domain.local_directory import search as local_search
 from src.domain.outcomes import pick_blocking_reason
 from src.domain.timeref import (
     MADRID,
@@ -222,6 +224,28 @@ class SchedulingEngine:
                 date_of_birth=date_of_birth,
             )
 
+        local = local_search(
+            name=name,
+            national_id=national_id_clean,
+            phone=phone,
+            date_of_birth=date_of_birth,
+        )
+        if local:
+            known_ids = {str(row.get("patient_id") or "") for row in matches}
+            known_docs = {str(row.get("national_id") or "") for row in matches}
+            added = 0
+            for row in local:
+                pid = str(row.get("patient_id") or "")
+                nid = str(row.get("national_id") or "")
+                if pid and pid in known_ids:
+                    continue
+                if nid and nid in known_docs:
+                    continue
+                matches.append(row)
+                added += 1
+            if added:
+                trace.append(f"local desk file added {added} known patient(s)")
+
         return {
             "count": len(matches),
             "matches": [_patient_brief(m) for m in matches[:6]],
@@ -233,8 +257,27 @@ class SchedulingEngine:
 
     async def patient_context(self, patient_id: str) -> dict[str, Any]:
         """The chart as a receptionist would have it open: who, and what history."""
-        upcoming = await self.client.appointments(patient_id, when="upcoming")
-        past = await self.client.appointments(patient_id, when="past")
+        if str(patient_id).startswith("local-"):
+            cached = local_chart(patient_id) or {}
+            return {
+                "patient_id": patient_id,
+                "upcoming": cached.get("upcoming") or [],
+                "past": cached.get("past") or [],
+                "visit_count": 1 if cached else 0,
+                "last_visit": None,
+            }
+        try:
+            upcoming = await self.client.appointments(patient_id, when="upcoming")
+            past = await self.client.appointments(patient_id, when="past")
+        except PlatformError:
+            cached = local_chart(patient_id) or {}
+            return {
+                "patient_id": patient_id,
+                "upcoming": cached.get("upcoming") or [],
+                "past": cached.get("past") or [],
+                "visit_count": cached.get("visit_count") or 0,
+                "last_visit": None,
+            }
         return {
             "patient_id": patient_id,
             "upcoming": [self._describe_appointment(a) for a in upcoming],

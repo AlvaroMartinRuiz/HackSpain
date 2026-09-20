@@ -77,6 +77,7 @@ class Agent:
             await self.session.note_response_latency(int((time.perf_counter() - started) * 1000))
             return
 
+        await self.session.record("agent_thinking", {})
         spoke = False
         self._held = False
         filler = asyncio.create_task(self._hold_if_quiet(), name="hold-if-quiet")
@@ -221,6 +222,7 @@ class Agent:
 
     async def _run_tool(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
         started = time.perf_counter()
+        await self.session.record("tool_started", {"name": name, "arguments": arguments})
         try:
             result = await self.tools.dispatch(name, arguments)
         except Exception as exc:  # a broken tool must not take the call with it
@@ -231,7 +233,8 @@ class Agent:
         await self.session.record("tool_call", {
             "name": name,
             "arguments": arguments,
-            "result": _clip(result),
+            # Product views and replay need fields, not a truncated JSON string.
+            "result": result,
             "elapsed_ms": elapsed,
         })
         self.messages.append({
@@ -343,14 +346,7 @@ class Agent:
 def _as_json(value: Any) -> str:
     import json
 
-    return json.dumps(value, ensure_ascii=False, default=str)[:4000]
-
-
-def _clip(value: Any, limit: int = 1200) -> Any:
-    text = _as_json(value)
-    if len(text) <= limit:
-        return value
-    return {"truncated": True, "preview": text[:limit]}
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 
 def _fold_speech(text: str) -> str:

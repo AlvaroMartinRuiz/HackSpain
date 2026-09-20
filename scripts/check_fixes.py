@@ -31,7 +31,7 @@ from src.domain.catalog import Catalog  # noqa: E402
 from src.domain.identity import dni_check_letter, normalize_text, parse_national_id  # noqa: E402
 from src.obs.store import store  # noqa: E402
 from src.telephony import session as session_module  # noqa: E402
-from src.telephony.session import CallSession, _two_letter  # noqa: E402
+from src.telephony.session import LIVE_SESSIONS, CallSession, _two_letter  # noqa: E402
 
 # The opening re-ask (nobody has spoken yet) has its own fixed wait.
 session_module.SILENCE_OPENING_RETRY_S = 0.8
@@ -94,6 +94,8 @@ def stop(session: CallSession) -> None:
     session._disarm_silence()
     for task in session._tasks:
         task.cancel()
+    LIVE_SESSIONS.pop(session.call_id, None)
+    store.close_call(session.call_id, "finished")
 
 
 def agent_lines(session: CallSession) -> list[str]:

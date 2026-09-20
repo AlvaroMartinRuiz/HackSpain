@@ -36,8 +36,8 @@ def main() -> int:
     check("chart opened", "chart" in ids)
     check("interruption recorded", "interrupt" in ids)
     check("second search after a change of mind", any(i.startswith("search:") for i in ids) or "changed" in ids)
-    check("book accepted", "submit:book" in ids)
-    check("follow-up on the journey", "followup" in ids)
+    check("book recorded", any(i.startswith("submit:book:") for i in ids))
+    check("follow-up on the journey", any(i.startswith("followup:") for i in ids))
 
     print("\nIntents")
     intents = product["intents"]
@@ -94,11 +94,39 @@ def main() -> int:
     check("maps points at the site", "maps" in (booked.get("maps_url") or ""))
     check("directions in the html", "Cómo llegar" in booked["html"])
     check("cancel has no ics", not ics_for(kind="cancel", slot="2026-09-22T10:30:00+02:00"))
-    check("maps helper", "google.com/maps" in maps_url("Arenal Norte, Madrid"))
+    check("maps helper", "Castellana" in maps_url("Arenal Norte, Madrid"))
+    check("maps never city-only", "query=Madrid" not in maps_url("Madrid") and "Castellana" in maps_url("Madrid"))
+    check("calendar preserves absolute appointment time", "DTSTART:20260922T083000Z" in booked["ics"])
+    check("calendar does not invent duration", "DTEND:" not in booked["ics"])
+    check("calendar rejects ambiguous local time", not ics_for(kind="book", slot="2026-09-22T10:30:00"))
 
     print("\nJourney is not a static checklist")
     empty = derive_journey([], [], [], [], "es")
     check("quiet call is only connected + language", len(empty) <= 2)
+
+    print("\nReal event edge cases")
+    def event(kind, **payload):
+        return {"kind": kind, "payload": payload}
+
+    failed_mail = overlay(events=[event("followup_email", sent=False, reason="disabled")])
+    check("disabled email is not shown as sent", failed_mail["journey"][1]["label"] == "Confirmation not sent")
+    check("no calendar is invented", failed_mail["journey"][1]["detail"] == "")
+    lookup = {"name": "lookup_patient", "result": {"found": 1}}
+    check("identity lookup does not invent booking intent", not overlay(tool_calls=[lookup])["intents"])
+    denied = overlay(events=[event("tool_call", name="open_chart", result={"error": "not found"})])
+    check("failed chart is not shown as opened", "chart" not in [s["id"] for s in denied["journey"]])
+    emergency = {"name": "check_symptom", "result": {"emergency": True, "red_flag": "chest pain"}}
+    actual = overlay(events=[event("tool_call", **emergency)], tool_calls=[emergency])
+    check("real emergency field drives journey", "redflag" in [s["id"] for s in actual["journey"]])
+    check("real emergency field drives intent", actual["intents"][0]["id"] == "escalate")
+    repeated = overlay(events=[event("tool_call", name="find_appointments", result={})] * 2)
+    check("repeated search is not evidence of preference change", "changed" not in [s["id"] for s in repeated["journey"]])
+    dry = {"action": "book", "accepted": True, "dry_run": True}
+    local = overlay(events=[event("submit", **dry)], submissions=[dry])
+    check("dry run is explicitly local", local["journey"][1]["label"] == "BOOK saved locally")
+    check("dry run is not platform acceptance", local["resolution"]["outcomes"][0]["accepted"] is False)
+    delivery = overlay(events=[event("followup_email", action="book", sent=False, path="example.html"), event("followup_email", action="book", sent=True, path="example.html")])
+    check("delivery updates queued confirmation", delivery["journey"][1]["label"] == "Confirmation sent")
 
     if FAILURES:
         print(f"\n{len(FAILURES)} product check(s) failed")

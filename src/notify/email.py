@@ -11,7 +11,7 @@ import asyncio
 import base64
 import logging
 import smtplib
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -199,10 +199,41 @@ def save_copy(call_id: str, kind: str, message: dict[str, str]) -> Path:
 
 
 def maps_url(place: str) -> str:
-    text = (place or "").strip()
+    """A pin on a real street, never a city-wide Madrid search."""
+    text = _pin_address(place)
     if not text:
         return ""
     return "https://www.google.com/maps/search/?api=1&query=" + quote(text)
+
+
+# Clínica Arenal sites mapped onto real streets so Directions is usable in a demo.
+_SITE_PIN = {
+    "norte": "Hospital Universitario La Paz, Paseo de la Castellana 261, 28046 Madrid",
+    "arenal norte": "Hospital Universitario La Paz, Paseo de la Castellana 261, 28046 Madrid",
+    "centro": "Clínica Arenal Centro, Calle del Arenal 12, 28013 Madrid",
+    "arenal centro": "Clínica Arenal Centro, Calle del Arenal 12, 28013 Madrid",
+    "sur": "Clínica Arenal Sur, Avenida de las Ciudades 8, 28903 Getafe, Madrid",
+    "arenal sur": "Clínica Arenal Sur, Avenida de las Ciudades 8, 28903 Getafe, Madrid",
+    "alberto alcocer": "Hospital Universitario La Paz, Paseo de la Castellana 261, 28046 Madrid",
+    "madrid": "Hospital Universitario La Paz, Paseo de la Castellana 261, 28046 Madrid",
+}
+
+
+def _pin_address(place: str) -> str:
+    text = (place or "").strip()
+    if not text:
+        return ""
+    key = text.lower()
+    if key in _SITE_PIN:
+        return _SITE_PIN[key]
+    for token, pin in sorted(_SITE_PIN.items(), key=lambda item: -len(item[0])):
+        if token != "madrid" and token in key:
+            return pin
+    if key in {"madrid", "madrid, spain", "españa", "spain"}:
+        return _SITE_PIN["madrid"]
+    if not any(ch.isdigit() for ch in text):
+        return _SITE_PIN["madrid"]
+    return text
 
 
 def ics_for(
@@ -221,7 +252,8 @@ def ics_for(
         start = datetime.fromisoformat(slot.replace("Z", "+00:00"))
     except ValueError:
         return ""
-    end = start + timedelta(minutes=30)
+    if start.tzinfo is None:
+        return ""
     uid = f"{call_id or uuid4()}@socketwizard"
     summary = "Clínica Arenal"
     description = f"Appointment with {doctor or 'your clinician'}."
@@ -231,8 +263,7 @@ def ics_for(
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
 
     def _fmt(moment: datetime) -> str:
-        local = moment.astimezone(now_madrid().tzinfo) if moment.tzinfo else moment
-        return local.strftime("%Y%m%dT%H%M%S")
+        return moment.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     def _esc_ics(value: str) -> str:
         return (
@@ -253,7 +284,6 @@ def ics_for(
         f"UID:{uid}",
         f"DTSTAMP:{stamp}",
         f"DTSTART:{_fmt(start)}",
-        f"DTEND:{_fmt(end)}",
         f"SUMMARY:{_esc_ics(summary)}",
         f"DESCRIPTION:{_esc_ics(description)}",
         f"LOCATION:{_esc_ics(site)}",

@@ -38,6 +38,7 @@ EVENTS: list[dict[str, Any]] = [
     {"kind": "tool_call", "ts": "2026-09-20T10:01:13+02:00",
      "payload": {"name": "open_chart", "arguments": {"patient_id": "P-DEMO"},
                  "result": {
+                     "patient": {"patient_id": "P-DEMO", "full_name": "Elena García"},
                      "visit_count": 11,
                      "last_visit": {"provider_name": "Dra. Iglesias", "when": "2025-03-04 10:00",
                                     "location_name": "Arenal Norte"},
@@ -72,7 +73,8 @@ EVENTS: list[dict[str, Any]] = [
                  "payload": {"slot": "2026-09-22T10:30:00+02:00", "provider_id": "PR-VILAR",
                              "location_id": "norte", "patient_id": "P-DEMO"}}},
     {"kind": "followup_email", "ts": "2026-09-20T10:01:43+02:00",
-     "payload": {"sent": True, "ics": True, "maps_url": "https://www.google.com/maps/search/?api=1&query=Madrid",
+     "payload": {"sent": True, "ics": True,
+                 "maps_url": "https://www.google.com/maps/search/?api=1&query=Hospital%20Universitario%20La%20Paz%2C%20Paseo%20de%20la%20Castellana%20261%2C%2028046%20Madrid",
                  "subject": "Su cita está confirmada", "action": "book"}},
     {"kind": "language_detected", "ts": "2026-09-20T10:01:50+02:00",
      "payload": {"language": "ca", "source": "text_markers"}},

@@ -121,11 +121,11 @@ def derive_journey(
             name = payload.get("name") or ""
             result = payload.get("result") or {}
             args = payload.get("arguments") or {}
-            if name == "open_chart":
+            if name == "open_chart" and result.get("patient"):
                 add("chart", "Chart opened", ts)
             elif name == "lookup_patient" and result.get("found") == 1:
                 add("verified", "Identity verified", ts)
-            elif name == "check_symptom" and result.get("escalate"):
+            elif name == "check_symptom" and (result.get("emergency") or result.get("escalate")):
                 add("redflag", "Red flag · booking stopped", ts)
             elif name == "nearest_site":
                 serving = result.get("nearest_serving") or {}
@@ -137,7 +137,6 @@ def derive_journey(
                     add("search", "Availability searched", ts, asked)
                 else:
                     add(f"search:{searches}", "Availability searched again", ts, asked)
-                    add("changed", "Caller changed preference", ts, asked)
             elif name == "book_slot" and (result.get("booked") or result.get("confirmed")):
                 confirmed = result.get("confirmed") or {}
                 add("confirmed", "Option confirmed", ts, confirmed.get("when") or "")
@@ -145,11 +144,17 @@ def derive_journey(
                 add("escalated", "Escalated", ts, str(args.get("reason") or ""))
         elif kind == "submit":
             action = (payload.get("action") or "").upper()
-            ok = payload.get("accepted") or payload.get("dry_run")
+            outcome = "saved locally" if payload.get("dry_run") else "accepted" if payload.get("accepted") else "not accepted"
             if action:
-                add(f"submit:{action.lower()}", f"{action} {'accepted' if ok else 'recorded'}", ts)
+                add(f"submit:{action.lower()}:{len(steps)}", f"{action} {outcome}", ts)
         elif kind == "followup_email":
-            add("followup", "Confirmation sent", ts, "Email" if payload.get("sent") else "Calendar ready")
+            label = "Confirmation sent" if payload.get("sent") else "Confirmation saved" if payload.get("path") else "Confirmation not sent"
+            key = f"followup:{payload.get('path') or payload.get('action') or 'email'}"
+            previous = next((step for step in steps if step["id"] == key), None)
+            if previous:
+                previous.update(label=label, ts=ts, detail="Calendar ready" if payload.get("ics") else "")
+            else:
+                add(key, label, ts, "Calendar ready" if payload.get("ics") else "")
 
     if not any(s["id"].startswith("language") for s in steps) and language:
         add(f"language:{language[:2]}", f"Language · {LANGUAGE_NAMES.get(language[:2], language)}")
@@ -185,10 +190,7 @@ def derive_intents(
     for call in tool_calls:
         name = call.get("name") or ""
         result = call.get("result") or {}
-        if name in ("lookup_patient", "open_chart"):
-            row = ensure("book", "Book an appointment")
-            row["steps"].append("patient identified" if name == "open_chart" else "looking up")
-        elif name == "find_appointments":
+        if name == "find_appointments":
             row = ensure("book", "Book an appointment")
             row["steps"].append("selecting appointment")
             if result.get("asked_for"):
@@ -205,7 +207,7 @@ def derive_intents(
             ensure("no_action", "Close without booking")["steps"].append("closing")
         elif name == "escalate_call":
             ensure("escalate", "Escalate")["steps"].append("escalating")
-        elif name == "check_symptom" and result.get("escalate"):
+        elif name == "check_symptom" and (result.get("emergency") or result.get("escalate")):
             row = ensure("escalate", "Escalate")
             row["steps"].append("red flag")
 
@@ -423,7 +425,12 @@ def derive_patient_context(
     chart = chart or {}
     visits = chart.get("visit_count")
     last = chart.get("last_visit") or {}
-    upcoming = (chart.get("upcoming") or [None])[0] or {}
+    raw_upcoming = chart.get("upcoming") or []
+    if isinstance(raw_upcoming, dict):
+        upcoming_list = [raw_upcoming]
+    else:
+        upcoming_list = [row for row in raw_upcoming if isinstance(row, dict)]
+    upcoming = upcoming_list[0] if upcoming_list else {}
     note = person.get("note") or ""
     hearing = any(token in note.lower() for token in _HEARING) if note else False
     name = _patient_name(person)
@@ -441,6 +448,7 @@ def derive_patient_context(
         "regular": regular,
         "last_visit": last or None,
         "upcoming": upcoming or None,
+        "appointments": upcoming_list,
         "hearing_support": hearing,
         "known": bool(person.get("has_visited_before") or visits),
     }
@@ -466,7 +474,7 @@ def derive_resolution(
         payload = submit.get("payload") or {}
         outcomes.append({
             "action": submit.get("action"),
-            "accepted": bool(submit.get("accepted") or submit.get("dry_run")),
+            "accepted": bool(submit.get("accepted") and not submit.get("dry_run")),
             "status": submit.get("status"),
             "dry_run": bool(submit.get("dry_run")),
             "when": payload.get("slot"),

@@ -19,6 +19,7 @@ data/ops-smoke.db
 data/ops-smoke.db-*
 data/recordings/
 data/emails/
+data/known_patients.json
 
 # Local IDE / review dumps. Never ship these.
 .cursor/
